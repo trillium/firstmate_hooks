@@ -15,6 +15,15 @@ const fixture = async fn => {
   try { await fn(root); } finally { await rm(root, { recursive: true, force: true }); }
 };
 
+test('OpenCode inbox-connect command documents the portable wrapper contract', async () => {
+  const command = await readFile(new URL('../.opencode/command/inbox-connect.md', import.meta.url), 'utf8');
+  assert.match(command, /^---\ndescription: Connect to the Parlay serial inbox workflow/m);
+  assert.match(command, /canonical inbox-handler skill/);
+  assert.match(command, /Usage: \/inbox-connect \[store\]/);
+  assert.match(command, /do not report connected unless enrollment succeeds/);
+  assert.match(command, /does not install or emulate Pi's `parlay-pi-inbox` extension/);
+});
+
 test('matches direct semantic commands, quotes and command lists without matching echoed text', () => {
   assert.deepEqual(parseSemanticCommand("fm_dispatch 'ticket with spaces' --mode=fast && fm_scout \"repo\"" ).map(x => [x.operation, x.args]), [
     ['fm_dispatch', ['ticket with spaces', '--mode=fast']], ['fm_scout', ['repo']]

@@ -1,0 +1,11 @@
+---
+description: Connect to the Parlay serial inbox workflow for a federated store
+---
+
+Connect this OpenCode session to the Parlay serial inbox workflow described by the canonical inbox-handler skill at `/Users/trilliumsmith/code/parlay/examples/fleet/skills/inbox-handler/SKILL.md`. Do not copy or edit that skill.
+
+Arguments: optional single store name (default `inbox`). Accept only `[a-z][a-z0-9_]*`; otherwise report `Usage: /inbox-connect [store]` and do not run commands. Resolve the store CLI by its named wrapper (`inbox`, `task`, etc.), never bare `bd`. The intended inbox worker is `inbox` / channel `pi-inbox` / assignee `pi-inbox`; other stores use `<store>-inbox` for channel and assignee. `PARLAY_SERVER` may select the relay; the normal endpoint is `http://localhost:31337`.
+
+Before connecting, verify the `parlay` CLI is available and the configured Parlay endpoint is reachable. Enroll the selected channel with `PARLAY_SERVER=http://localhost:31337 parlay listen --agent <store>-inbox --name "<Store> Inbox" --color "#38bdf8"` (for `inbox`, use agent `pi-inbox` and name `PI Inbox`). Surface command errors verbatim and do not report connected unless enrollment succeeds. This listener is persistent: do not start a detached/background copy or replace an existing listener without explicitly reporting what is running. Once enrolled, follow the canonical skill's serial worker procedure: select eligible open items, atomically claim, read the full description, append the dated/source-linked knowledge record, and close only with a receipt after that record exists. Recheck until no eligible item remains; leave specialized zones alone. Do not invent completed work.
+
+Important compatibility boundary: this OpenCode command wraps the documented Parlay enrollment and worker procedure. It does not install or emulate Pi's `parlay-pi-inbox` extension; OpenCode does not receive its persisted per-session listener state or automatic poke-to-follow-up-turn behavior here. Do not claim automatic wake/reconnect. The shared `fm-hooks` plugin separately observes successful/failed `fm_*` shell calls through OpenCode's `tool.execute.after` and uses the same normalized event/rule pipeline as Claude Code; it is observational, not the inbox listener.
