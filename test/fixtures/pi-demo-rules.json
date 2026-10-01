@@ -1,0 +1,16 @@
+{
+  "rules": [
+    {
+      "id": "fixture-dispatch",
+      "operation": "fm_dispatch",
+      "outcomes": ["success"],
+      "action": { "command": "printf", "args": ["fm-hooks demo fixture action; do not run worker"] }
+    },
+    {
+      "id": "fixture-scout",
+      "operation": "fm_scout",
+      "outcomes": ["success"],
+      "action": { "command": "printf", "args": ["fm-hooks demo fixture action; do not run worker"] }
+    }
+  ]
+}

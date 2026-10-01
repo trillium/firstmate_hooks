@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -9,6 +9,7 @@ import { parseSemanticCommand, normalizeEvent, explicitOpenCodeOutcome } from '.
 import { observe } from '../src/observer.js';
 import { runQueue } from '../src/queue.js';
 import fmHooksPlugin from '../src/opencode-plugin.js';
+import fmHooksPiExtension from '../src/pi-extension.js';
 
 const fixture = async fn => {
   const root = await mkdtemp(join(tmpdir(), 'fm-hooks-'));
@@ -48,6 +49,82 @@ test('OpenCode result inference retains unknown and does not infer from empty ou
   assert.deepEqual(explicitOpenCodeOutcome({ metadata: { exitCode: 7 } }), { outcome: 'failure', exitCode: 7 });
   assert.deepEqual(explicitOpenCodeOutcome({ metadata: { success: true } }), { outcome: 'success', exitCode: null });
 });
+
+test('Pi completion adapter persists shared semantic events without touching tool data', async () => fixture(async root => {
+  const rulesPath = join(root, 'rules.json');
+  await writeFile(rulesPath, await readFile(new URL('./fixtures/pi-demo-rules.json', import.meta.url), 'utf8'));
+  const oldQueue = process.env.FM_HOOK_QUEUE, oldRules = process.env.FM_HOOK_RULES;
+  process.env.FM_HOOK_QUEUE = root;
+  process.env.FM_HOOK_RULES = rulesPath;
+  try {
+    const handlers = new Map();
+    fmHooksPiExtension({ on: (name, handler) => handlers.set(name, handler) });
+    assert.deepEqual([...handlers.keys()], ['tool_execution_start', 'tool_execution_end']);
+    const command = "fm_dispatch 'fixture task' && fm_scout fixture-project";
+    const args = Object.freeze({ command });
+    const start = Object.freeze({ toolCallId: 'pi-c1', toolName: 'bash', args });
+    const result = Object.freeze({ content: Object.freeze([{ type: 'text', text: 'private fixture output' }]) });
+    const end = Object.freeze({ toolCallId: 'pi-c1', toolName: 'bash', isError: false, result });
+    const ctx = { cwd: '/fixture', sessionManager: { getSessionId: () => 'pi-s1' } };
+    await handlers.get('tool_execution_start')(start, ctx);
+    await handlers.get('tool_execution_end')(end, ctx);
+    assert.deepEqual(start.args, { command });
+    assert.deepEqual(end.result, { content: [{ type: 'text', text: 'private fixture output' }] });
+
+    const records = await Promise.all((await readdir(join(root, 'events')))
+      .map(name => readFile(join(root, 'events', name), 'utf8').then(JSON.parse)));
+    const semantic = events => events.map(({ operation, args, rawCommand, cwd, outcome }) =>
+      ({ operation, args, rawCommand, cwd, outcome })).sort((a, b) => a.operation.localeCompare(b.operation));
+    const common = { sessionId: 'same-session', callId: 'same-call', rawCommand: command, cwd: '/fixture', outcome: 'success' };
+    assert.deepEqual(semantic(records), semantic(normalizeEvent({ ...common, harness: 'claude-code' })));
+    assert.deepEqual(semantic(records), semantic(normalizeEvent({ ...common, harness: 'opencode' })));
+    assert.ok(records.every(event => event.harness === 'pi' && event.exitCode === null));
+    assert.ok(!JSON.stringify(records).includes('private fixture output'));
+    assert.equal((await readdir(join(root, 'jobs'))).length, 2);
+    assert.equal((await readdir(root)).includes('done'), false, 'demo queues fixture jobs but never runs a worker');
+  } finally {
+    if (oldQueue === undefined) delete process.env.FM_HOOK_QUEUE; else process.env.FM_HOOK_QUEUE = oldQueue;
+    if (oldRules === undefined) delete process.env.FM_HOOK_RULES; else process.env.FM_HOOK_RULES = oldRules;
+  }
+}));
+
+test('Pi missing or ambiguous completion outcomes stay unknown and cannot fire success rules', async () => fixture(async root => {
+  const rulesPath = join(root, 'rules.json');
+  await writeFile(rulesPath, await readFile(new URL('./fixtures/pi-demo-rules.json', import.meta.url), 'utf8'));
+  const oldQueue = process.env.FM_HOOK_QUEUE, oldRules = process.env.FM_HOOK_RULES;
+  process.env.FM_HOOK_QUEUE = root;
+  process.env.FM_HOOK_RULES = rulesPath;
+  try {
+    const handlers = new Map();
+    fmHooksPiExtension({ on: (name, handler) => handlers.set(name, handler) });
+    const startCall = async callId => handlers.get('tool_execution_start')(
+      { toolCallId: callId, toolName: 'bash', args: { command: `fm_dispatch ${callId}` } },
+      { cwd: '/fixture', sessionManager: { getSessionId: () => 'pi-outcomes' } });
+    const endCall = async event => handlers.get('tool_execution_end')(event);
+    await startCall('success');
+    await endCall({ toolCallId: 'success', toolName: 'bash', isError: false, result: {} });
+    await startCall('failure');
+    await endCall({ toolCallId: 'failure', toolName: 'bash', isError: true, result: {} });
+    await startCall('missing');
+    await endCall({ toolCallId: 'missing', toolName: 'bash', result: {} });
+    await startCall('ambiguous');
+    await endCall({ toolCallId: 'ambiguous', toolName: 'bash', isError: 'false', result: {} });
+    await endCall({ toolCallId: 'no-start', toolName: 'bash', isError: false, result: {} });
+    await handlers.get('tool_execution_start')(
+      { toolCallId: 'not-bash', toolName: 'custom', args: { command: 'fm_dispatch ignored' } },
+      { cwd: '/fixture', sessionManager: { getSessionId: () => 'pi-outcomes' } });
+
+    const records = await Promise.all((await readdir(join(root, 'events')))
+      .map(name => readFile(join(root, 'events', name), 'utf8').then(JSON.parse)));
+    assert.deepEqual(records.map(event => [event.callId, event.outcome]).sort(), [
+      ['ambiguous', 'unknown'], ['failure', 'failure'], ['missing', 'unknown'], ['success', 'success']
+    ]);
+    assert.equal((await readdir(join(root, 'jobs'))).length, 1);
+  } finally {
+    if (oldQueue === undefined) delete process.env.FM_HOOK_QUEUE; else process.env.FM_HOOK_QUEUE = oldQueue;
+    if (oldRules === undefined) delete process.env.FM_HOOK_RULES; else process.env.FM_HOOK_RULES = oldRules;
+  }
+}));
 
 test('success-only rules durably enqueue once; failure and unknown do not fire', async () => fixture(async root => {
   const rules = [{ id: 'verify-dispatch', operation: 'fm_dispatch', outcomes: ['success'], action: { command: 'fixture', args: [] } }];

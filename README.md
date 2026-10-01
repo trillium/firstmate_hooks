@@ -1,6 +1,6 @@
 # fm-hooks
 
-External, post-call observation of semantic `fm_*` commands for Claude Code and OpenCode. This repository does not change Firstmate, intercept PATH, or rewrite/block a command. Both harness adapters feed the same normalizer, durable local outbox, and outcome-gated rule evaluator.
+External, post-call observation of semantic `fm_*` commands for Claude Code, OpenCode, and Pi. This repository does not change Firstmate, intercept PATH, or rewrite/block a command. Harness adapters feed the same normalizer, durable local outbox, and outcome-gated rule evaluator.
 
 ## Requirements
 
@@ -61,6 +61,20 @@ The adapter observes only Bash and only post-success/post-failure. Claude's Bash
 Install `src/opencode-plugin.js` as a plugin at the OpenCode-supported project/global plugin location (for example, a project `.opencode/plugins/fm-hooks.js` wrapper exporting this module). Configure `FM_HOOK_QUEUE` and `FM_HOOK_RULES` in the OpenCode process environment. The plugin observes `tool.execute.before` only to retain an in-memory start time, then observes Bash/shell `tool.execute.after`; it does not mutate hook inputs or outputs.
 
 The installed compatibility evidence was OpenCode CLI 1.18.30 with `@opencode-ai/plugin` types 1.15.3. Verify the API against your actual versions. Types do not guarantee an exit-code field or an explicit failure callback. The adapter accepts explicit `metadata.exitCode`, `metadata.exit_code`, `metadata.code`, corresponding top-level codes, or explicit `success` booleans. It never infers success from empty output: absent a recognized signal, outcome is `unknown`, and success-only rules do not fire. Project directory/worktree is a baseline cwd, not proof of the spawned shell's cwd. Runtime plugin context and metadata are version-sensitive.
+
+### Pi
+
+`src/pi-extension.js` observes the declared `tool_execution_start` and `tool_execution_end` lifecycle events. It retains only a recognized Bash command and start metadata by Pi call ID, then normalizes it through the same observer after the matching completion. It never subscribes to input/result-transforming hooks, changes tool data, or stores the arbitrary result payload. Pi's completion event provides an `isError` flag but no stable exit-code contract: `true` maps to failure, `false` to success, and missing or non-boolean values to unknown. Calls without a matching start are ignored. Observer errors are caught so they cannot affect the completed tool call.
+
+Load it for one Pi process, with a fresh disposable queue and the fixture-only rules:
+
+```sh
+FM_HOOK_QUEUE="$(mktemp -d "${TMPDIR:-/tmp}/fm-hooks-pi-demo.XXXXXX")" \
+FM_HOOK_RULES="$PWD/test/fixtures/pi-demo-rules.json" \
+pi --extension "$PWD/src/pi-extension.js"
+```
+
+This does not register a global extension or start a worker. The rules enqueue only `printf` fixture actions, and no worker is started. The test suite demonstrates the adapter by supplying harmless `fm_dispatch` / `fm_scout` fixture event data directly; those command strings are never executed.
 
 ## Inbox-connect compatibility
 
