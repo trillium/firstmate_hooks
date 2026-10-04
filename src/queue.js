@@ -21,12 +21,25 @@ async function writeOnce(path, value) {
   } finally { await rm(temporary, { force: true }); }
 }
 
+export async function appendEventLog(record, root = process.env.FM_HOOK_QUEUE || '.fm-hooks/queue') {
+  await mkdir(root, { recursive: true });
+  const path = join(root, 'events.jsonl');
+  const file = await open(path, 'a', 0o600);
+  try {
+    await file.writeFile(`${JSON.stringify({ ...record, loggedAt: new Date().toISOString() })}\n`);
+    await file.sync();
+  } finally { await file.close(); }
+  return path;
+}
+
 export async function persistEvent(event, root = process.env.FM_HOOK_QUEUE || '.fm-hooks/queue') {
   const events = join(root, 'events');
   await mkdir(events, { recursive: true });
   const path = join(events, `${event.correlationId}-${safe(event.operation)}.json`);
   // Same call ID may be observed repeatedly. Preserve the original durable record.
   await writeOnce(path, event);
+  // The JSONL log appends every observation, including repeats, so a tail proves the hook is live.
+  await appendEventLog({ type: 'event', ...event }, root);
   return path;
 }
 

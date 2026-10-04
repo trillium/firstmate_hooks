@@ -140,6 +140,10 @@ test('success-only rules durably enqueue once; failure and unknown do not fire',
   assert.equal(replay[0].actions[0].enqueued, false);
   assert.equal((await readdir(join(root, 'jobs'))).length, 1);
   assert.equal((await readdir(join(root, 'events'))).length, 1);
+  const log = (await readFile(join(root, 'events.jsonl'), 'utf8')).trim().split('\n');
+  assert.equal(log.length, 4);
+  assert.equal(JSON.parse(log.at(-1)).type, 'event');
+  assert.equal(JSON.parse(log.at(-1)).operation, 'fm_dispatch');
   let executions = 0;
   await runQueue({ root, execute: async () => { executions++; } });
   assert.equal(executions, 1);

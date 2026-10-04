@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { parseSemanticCommand } from './normalize.js';
 import { observe } from './observer.js';
+import { appendEventLog } from './queue.js';
 
 let raw = '';
 for await (const chunk of process.stdin) raw += chunk;
@@ -10,6 +12,11 @@ try {
   if (tool !== 'Bash' || !['PostToolUse', 'PostToolUseFailure'].includes(eventName)) process.exit(0);
   const command = event.tool_input?.command;
   if (typeof command !== 'string') process.exit(0);
+  if (!parseSemanticCommand(command).length) {
+    await appendEventLog({ type: 'seen', matched: false, harness: 'claude-code', tool, rawCommand: command,
+      sessionId: event.session_id ?? null, callId: event.tool_use_id ?? null });
+    process.exit(0);
+  }
   const finishedAt = new Date().toISOString();
   const response = event.tool_response ?? event.error ?? null;
   const outcome = eventName === 'PostToolUseFailure' ? 'failure' : 'success';

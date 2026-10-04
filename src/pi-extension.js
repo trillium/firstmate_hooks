@@ -1,5 +1,6 @@
 import { parseSemanticCommand } from './normalize.js';
 import { observe } from './observer.js';
+import { appendEventLog } from './queue.js';
 
 // Observe only completed Pi bash calls. Keep just enough start data to pair the
 // completion event; the adapter never patches or replaces Pi tool data.
@@ -8,7 +9,6 @@ export default function fmHooksPiExtension(pi) {
 
   pi.on('tool_execution_start', (event, ctx) => {
     if (event.toolName !== 'bash' || typeof event.args?.command !== 'string') return;
-    if (!parseSemanticCommand(event.args.command).length) return;
 
     starts.set(event.toolCallId, {
       rawCommand: event.args.command,
@@ -23,6 +23,22 @@ export default function fmHooksPiExtension(pi) {
     const start = starts.get(event.toolCallId);
     if (!start) return;
     starts.delete(event.toolCallId);
+
+    if (!parseSemanticCommand(start.rawCommand).length) {
+      try {
+        await appendEventLog({
+          type: 'seen',
+          matched: false,
+          harness: 'pi',
+          tool: event.toolName,
+          callId: event.toolCallId,
+          rawCommand: start.rawCommand
+        });
+      } catch (error) {
+        console.error(`fm-hooks observer error: ${error.message}`);
+      }
+      return;
+    }
 
     const finishedAt = new Date().toISOString();
     const outcome = event.isError === true ? 'failure' :
