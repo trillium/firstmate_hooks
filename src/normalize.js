@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto';
 
-const OPERATIONS = new Set(['fm_dispatch', 'fm_scout']);
-
 // Split only shell command-list operators outside quotes. This is intentionally not
 // a shell interpreter: semantic matches must be the command word, never text in args.
 export function commandSegments(command) {
@@ -39,6 +37,9 @@ function shellWords(text) {
   return words;
 }
 
+// A Firstmate call is identified by its command basename, not by a name list.
+export const FIRSTMATE_CALL = /^fm[-_][A-Za-z0-9_.-]+$/;
+
 export function parseSemanticCommand(rawCommand) {
   if (typeof rawCommand !== 'string' || !rawCommand.trim()) return [];
   const found = [];
@@ -51,7 +52,7 @@ export function parseSemanticCommand(rawCommand) {
     const command = words[index];
     if (!command) continue;
     const operation = command.split('/').at(-1);
-    if (!/^fm_[A-Za-z0-9_]+$/.test(operation) || !OPERATIONS.has(operation)) continue;
+    if (!FIRSTMATE_CALL.test(operation)) continue;
     found.push({ operation, args: words.slice(index + 1), rawCommand });
   }
   return found;

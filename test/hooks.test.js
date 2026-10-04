@@ -33,6 +33,9 @@ test('matches direct semantic commands, quotes and command lists without matchin
     assert.deepEqual(parseSemanticCommand(command), [], command);
   }
   assert.deepEqual(parseSemanticCommand('A=1 fm_dispatch x')[0].args, ['x']);
+  assert.deepEqual(parseSemanticCommand('fm_send task-1 "done" && bin/fm-spawn.sh task-1').map(x => x.operation), ['fm_send', 'fm-spawn.sh']);
+  assert.deepEqual(parseSemanticCommand('echo fm-teardown.sh x'), []);
+  assert.deepEqual(parseSemanticCommand('notfm-send.sh x'), []);
 });
 
 test('normalizes Claude/OpenCode-shaped fixtures to the same semantic context', () => {

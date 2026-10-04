@@ -44,7 +44,8 @@ export async function enqueueAction(event, rule, action, root = process.env.FM_H
 export async function evaluateAndEnqueue(event, rules, root) {
   const results = [];
   for (const rule of rules) {
-    if (rule.operation !== event.operation || !Array.isArray(rule.outcomes) || !rule.outcomes.includes(event.outcome)) continue;
+    const matchesOperation = rule.operation === '*' || rule.operation === event.operation;
+    if (!matchesOperation || !Array.isArray(rule.outcomes) || !rule.outcomes.includes(event.outcome)) continue;
     results.push(await enqueueAction(event, rule, rule.action, root));
   }
   return results;
