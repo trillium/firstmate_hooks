@@ -1,29 +1,45 @@
-import { link, mkdir, open, readFile, readdir, rename, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { writeOnce } from './atomic.js';
+import { ensureQueue } from './migrate.js';
+import { defaultRulesPaths, eventLogPolicy, queueRoot } from './paths.js';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const safe = value => String(value).replace(/[^A-Za-z0-9_.-]/g, '_');
 
-async function writeOnce(path, value) {
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  const file = await open(temporary, 'wx', 0o600);
-  try { await file.writeFile(`${JSON.stringify(value)}\n`); await file.sync(); }
-  finally { await file.close(); }
+// events.jsonl is bounded. Once it reaches the cap it rolls to events.jsonl.1, older
+// rolls shift down, and the roll past FM_HOOK_EVENT_LOG_KEEP is dropped. Rotation is
+// guarded by an exclusive lock so overlapping harness processes cannot interleave
+// renames; a process that loses the lock simply appends to the freshly rolled log.
+async function rotateEventLog(path, { maxBytes, keep }) {
+  if (!maxBytes || keep < 1) return null;
+  const lockPath = `${path}.rotate.lock`;
+  const lock = await claimLock(lockPath);
+  if (!lock) return null;
   try {
-    await link(temporary, path);
-    const directory = await open(dirname(path), 'r');
-    try { await directory.sync(); } finally { await directory.close(); }
-    return true;
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    return false;
-  } finally { await rm(temporary, { force: true }); }
+    const size = await stat(path).then(entry => entry.size, error => {
+      if (error.code === 'ENOENT') return 0;
+      throw error;
+    });
+    if (size < maxBytes) return null;
+    for (let index = keep; index >= 1; index--) {
+      const target = `${path}.${index}`;
+      const source = index === 1 ? path : `${path}.${index - 1}`;
+      if (index === keep) await rm(target, { force: true });
+      await rename(source, target).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    }
+    return path;
+  } finally {
+    await lock.close();
+    await rm(lockPath, { force: true });
+  }
 }
 
-export async function appendEventLog(record, root = process.env.FM_HOOK_QUEUE || '.fm-hooks/queue') {
-  await mkdir(root, { recursive: true });
+export async function appendEventLog(record, root = queueRoot()) {
+  await ensureQueue(root);
   const path = join(root, 'events.jsonl');
+  await rotateEventLog(path, eventLogPolicy());
   const file = await open(path, 'a', 0o600);
   try {
     await file.writeFile(`${JSON.stringify({ ...record, loggedAt: new Date().toISOString() })}\n`);
@@ -32,7 +48,8 @@ export async function appendEventLog(record, root = process.env.FM_HOOK_QUEUE ||
   return path;
 }
 
-export async function persistEvent(event, root = process.env.FM_HOOK_QUEUE || '.fm-hooks/queue') {
+export async function persistEvent(event, root = queueRoot()) {
+  await ensureQueue(root);
   const events = join(root, 'events');
   await mkdir(events, { recursive: true });
   const path = join(events, `${event.correlationId}-${safe(event.operation)}.json`);
@@ -43,7 +60,8 @@ export async function persistEvent(event, root = process.env.FM_HOOK_QUEUE || '.
   return path;
 }
 
-export async function enqueueAction(event, rule, action, root = process.env.FM_HOOK_QUEUE || '.fm-hooks/queue') {
+export async function enqueueAction(event, rule, action, root = queueRoot()) {
+  await ensureQueue(root);
   const jobs = join(root, 'jobs');
   await mkdir(jobs, { recursive: true });
   const id = hash(`${event.correlationId}\0${rule.id}`);
@@ -64,15 +82,21 @@ export async function evaluateAndEnqueue(event, rules, root) {
   return results;
 }
 
-export async function loadRules(path = process.env.FM_HOOK_RULES || 'fm-hooks.rules.json') {
-  try {
-    const parsed = JSON.parse(await readFile(path, 'utf8'));
+// Rule sets are read from an ordered list of absolute candidates. FM_HOOK_RULES is an
+// explicit override; otherwise a project-local fm-hooks.rules.json is used when it
+// exists, falling back to the state-resident default. A malformed file still throws
+// rather than silently falling through to a different rule set.
+export async function loadRules(paths = defaultRulesPaths()) {
+  const candidates = Array.isArray(paths) ? paths : [paths];
+  for (const path of candidates) {
+    let contents;
+    try { contents = await readFile(path, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    const parsed = JSON.parse(contents);
     if (!Array.isArray(parsed.rules)) throw new Error('rules file must contain a rules array');
     return parsed.rules;
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw error;
   }
+  return [];
 }
 
 // Standalone worker: queued actions execute outside the latency-sensitive hook.
@@ -103,7 +127,8 @@ async function claimLock(path) {
   return null;
 }
 
-export async function runQueue({ root = process.env.FM_HOOK_QUEUE || '.fm-hooks/queue', execute }) {
+export async function runQueue({ root = queueRoot(), execute }) {
+  await ensureQueue(root);
   const jobs = join(root, 'jobs'), done = join(root, 'done'), failed = join(root, 'failed');
   await Promise.all([mkdir(jobs, { recursive: true }), mkdir(done, { recursive: true }), mkdir(failed, { recursive: true })]);
   const names = (await readdir(jobs)).filter(name => name.endsWith('.json')).sort();

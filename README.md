@@ -8,7 +8,7 @@ Node.js 20+. No runtime dependencies. Keep this repository and its configuration
 
 ## Install
 
-Set `FM_HOOK_QUEUE` to a durable local directory shared by the hook process and worker. Set `FM_HOOK_RULES` to a rules JSON file. Hooks do not launch follow-on actions; run `node /path/to/fm-hooks/src/worker.js` as a separately supervised process or scheduled job. The worker consumes queued actions without shell evaluation.
+`FM_HOOK_QUEUE` and `FM_HOOK_RULES` are optional. With neither set, fm-hooks resolves an absolute state root from its own identity, never from the working directory: the queue defaults to `$FM_HOOK_STATE_DIR/queue` when `FM_HOOK_STATE_DIR` is set, otherwise `$FM_HOME/state/fm-hooks/queue`, otherwise `$XDG_STATE_HOME/fm-hooks/queue`, and finally `~/.local/state/fm-hooks/queue`. `FM_HOOK_QUEUE` remains an explicit override, and a relative override is anchored to the home directory rather than to `process.cwd()`. Hooks do not launch follow-on actions; run `node /path/to/fm-hooks/src/worker.js` as a separately supervised process or scheduled job. The worker consumes queued actions without shell evaluation.
 
 Example `fm-hooks.rules.json` (replace executable paths and arguments to match your task-store CLI):
 
@@ -31,7 +31,17 @@ Example `fm-hooks.rules.json` (replace executable paths and arguments to match y
 }
 ```
 
-Only explicitly configured rules fire. The scheduler writes a unique job keyed by correlation ID + rule ID using exclusive file creation; repeated hook deliveries cannot enqueue that rule twice. Queue files are local JSON under `queue/events`, `queue/jobs`, `queue/done`, and `queue/failed`. Every observation is also appended as one JSON object per line to `events.jsonl` in the queue directory. A non-matching bash call is appended as `{"type":"seen","matched":false,...}` so a tail proves the hook is loaded before the first Firstmate call. Tail it with `tail -f "$FM_HOOK_QUEUE/events.jsonl"`. Keep the queue on durable storage and restrict access (files are created mode 0600). Do not place secrets in event metadata.
+Only explicitly configured rules fire. The scheduler writes a unique job keyed by correlation ID + rule ID using exclusive file creation; repeated hook deliveries cannot enqueue that rule twice. Queue files are local JSON under `queue/events`, `queue/jobs`, `queue/done`, and `queue/failed`. Every observation is also appended as one JSON object per line to `events.jsonl` in the queue directory. A non-matching bash call is appended as `{"type":"seen","matched":false,...}` so a tail proves the hook is loaded before the first Firstmate call. Tail it with `tail -f "${FM_HOOK_QUEUE:-$HOME/.local/state/fm-hooks/queue}/events.jsonl"` (substitute your resolved queue root; see below). Keep the queue on durable storage and restrict access (files are created mode 0600). Do not place secrets in event metadata.
+
+### State location, migration, and log rotation
+
+Observer state never lands in the directory an agent happens to run in. Queue files are local JSON under `<queue>/events`, `<queue>/jobs`, `<queue>/done`, and `<queue>/failed`, and `FM_HOOK_QUEUE` overrides the default queue root.
+
+An earlier version defaulted to the relative path `.fm-hooks/queue`, so repositories an agent ran in may still contain one. On the first run against the default queue, fm-hooks adopts such a legacy directory: it copies the events, the JSONL log, and the worker outcome records into `<queue>/migrated/<repo-key>/`, re-queues any pending jobs into `<queue>/jobs`, writes a `MIGRATED.json` marker, and prints a one-time notice on stderr naming both locations. It never moves, deletes, or creates anything inside the repository, and the legacy directory is left in place for the operator to delete. Adoption is per legacy directory and is idempotent, and an explicit `FM_HOOK_QUEUE` adopts nothing because the operator then owns the layout.
+
+`events.jsonl` is bounded. Once it reaches `FM_HOOK_EVENT_LOG_MAX_BYTES` (default 5 MiB) it rolls to `events.jsonl.1`: the oldest retained roll is dropped, older rolls shift down, and the live log restarts. `FM_HOOK_EVENT_LOG_KEEP` (default 3) sets how many rolls are kept, bounding the log at roughly `FM_HOOK_EVENT_LOG_MAX_BYTES x (FM_HOOK_EVENT_LOG_KEEP + 1)`. Setting `FM_HOOK_EVENT_LOG_MAX_BYTES=0` disables rotation explicitly.
+
+`fm-hooks.rules.json` is legitimately per-project, so a project-local file is still discovered by convention. That candidate is read-only -- fm-hooks never creates a rules file -- and the fallback is state-resident, so a missing rules file can never cause a write inside a product tree. Precedence is `FM_HOOK_RULES`, then `<project>/fm-hooks.rules.json`, then `<state root>/fm-hooks.rules.json`. A malformed file is an error rather than a silent fall-through to another rule set.
 
 The worker passes `FM_HOOK_CORRELATION_ID` and `FM_HOOK_IDEMPOTENCY_KEY` to the action and invokes a fixed executable + argv (`shell:false`). Design actions to be idempotent using that key: a crash after an external action succeeds but before the job is marked done can cause at-least-once execution. Failed actions move to `failed/` for operator inspection; they are not silently retried. Hooks catch observer errors and return normally so instrumentation cannot fail the observed call. Local persistence is the only synchronous side effect in the post-hook.
 
@@ -100,7 +110,7 @@ A call is a Firstmate call when its command basename matches `/^fm[-_][A-Za-z0-9
 npm test
 ```
 
-Tests use harmless command strings and temporary directories only; they never invoke Firstmate or a configured action. The suite covers quoted args, command lists, false positives, equivalent Claude/OpenCode event normalization, unknown/failure outcome handling, the `fm_dispatch -> verification` and `fm_scout -> report review` rules, duplicate event delivery, durable job consumption, and action queue idempotency. For a live harness smoke test, use harmless fixture commands such as `printf marker`, `sh -c 'exit 7'`, and deliberately non-side-effecting `fm_dispatch`-shaped fixture text in a disposable configuration. Never run real task actions during adapter tests.
+Tests use harmless command strings and temporary directories only; they never invoke Firstmate or a configured action. The suite covers quoted args, command lists, false positives, equivalent Claude/OpenCode event normalization, unknown/failure outcome handling, the `fm_dispatch -> verification` and `fm_scout -> report review` rules, duplicate event delivery, durable job consumption, and action queue idempotency. A dedicated suite covers state-path resolution: that the default queue root is absolute and independent of the working directory, the override precedence chain, legacy-queue adoption and its idempotence, event-log rotation bounds, and an end-to-end run of the real adapters inside a scratch `git` repository asserting `git status --porcelain` is unchanged. For a live harness smoke test, use harmless fixture commands such as `printf marker`, `sh -c 'exit 7'`, and deliberately non-side-effecting `fm_dispatch`-shaped fixture text in a disposable configuration. Never run real task actions during adapter tests.
 
 ## Compatibility gaps
 
