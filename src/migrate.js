@@ -1,7 +1,8 @@
 import { mkdir, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { writeOnce, writeOnceRaw } from './atomic.js';
-import { namespaceKey, queueRoot, safeCwd } from './paths.js';
+import { excludeFromGit } from './exclude.js';
+import { namespaceKey, queueRoot, safeCwd, stateRoot } from './paths.js';
 
 // Before this fix the queue default was the relative path '.fm-hooks/queue', resolved
 // against process.cwd(). Directories created that way during previous runs still exist
@@ -23,6 +24,26 @@ import { namespaceKey, queueRoot, safeCwd } from './paths.js';
 // repeat run or a concurrent first run cannot duplicate or clobber state.
 
 const adopted = new Set();
+const excluded = new Set();
+
+// The state root is absolute, so the queue normally lands outside every repository. It
+// does not have to: an explicit FM_HOOK_STATE_DIR or FM_HOOK_QUEUE can point into a
+// checkout, and a home directory can itself be a repository. There the queue would read
+// as uncommitted work and stop every clean-tree guard, so fm-hooks adds the path to
+// the owning repository's local exclude file rather than to a .gitignore it would have
+// to commit to someone else's project.
+//
+// Detection starts from the path itself, not from the working directory, because the
+// only question that matters is which working tree owns the directory. Memoized per
+// process like adoption: a long-lived harness must not shell out to git per call, and
+// the memo also covers the common case where there is nothing to exclude.
+async function excludeObservedState(root) {
+  const key = resolve(root);
+  if (excluded.has(key)) return;
+  excluded.add(key);
+  try { await excludeFromGit([stateRoot(), root]); }
+  catch (error) { /* A refusal is silent: the observation still stands on its own. */ }
+}
 
 export async function ensureQueue(root, options = {}) {
   const cwd = options.cwd ?? safeCwd();
@@ -38,6 +59,7 @@ export async function ensureQueue(root, options = {}) {
     catch (error) { console.error(`fm-hooks legacy migration error: ${error.message}`); }
   }
   await mkdir(root, { recursive: true });
+  await excludeObservedState(root);
   return root;
 }
 
