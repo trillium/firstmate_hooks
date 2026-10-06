@@ -8,7 +8,7 @@ Node.js 20+. No runtime dependencies. Keep this repository and its configuration
 
 ## Install
 
-`FM_HOOK_QUEUE` and `FM_HOOK_RULES` are optional. With neither set, fm-hooks resolves an absolute state root from its own identity, never from the working directory: the queue defaults to `$FM_HOOK_STATE_DIR/queue` when `FM_HOOK_STATE_DIR` is set, otherwise `$FM_HOME/state/fm-hooks/queue`, otherwise `$XDG_STATE_HOME/fm-hooks/queue`, and finally `~/.local/state/fm-hooks/queue`. `FM_HOOK_QUEUE` remains an explicit override, and a relative override is anchored to the home directory rather than to `process.cwd()`. Hooks do not launch follow-on actions; run `node /path/to/fm-hooks/src/worker.js` as a separately supervised process or scheduled job. The worker consumes queued actions without shell evaluation.
+`FM_HOOK_QUEUE` and `FM_HOOK_RULES` are optional. With neither set, fm-hooks resolves an absolute state root from its own identity, never from the working directory: the queue defaults to `$FM_HOOK_STATE_DIR/queue` when `FM_HOOK_STATE_DIR` is set, otherwise `$FM_HOME/state/fm-hooks/queue`, otherwise `$XDG_STATE_HOME/fm-hooks/queue`, and finally `~/.local/state/fm-hooks/queue`. `FM_HOOK_QUEUE` remains an explicit override, and a relative override is anchored to the home directory rather than to `process.cwd()`. Hooks do not launch follow-on actions; the worker consumes queued actions without shell evaluation, and it must be supervised — see [Supervising the worker](#supervising-the-worker), which is the only part of this repository that has to be running for rules to fire at all.
 
 Example `fm-hooks.rules.json` (replace executable paths and arguments to match your task-store CLI):
 
@@ -38,6 +38,35 @@ Only explicitly configured rules fire. The scheduler writes a unique job keyed b
 Observer state never lands in the directory an agent happens to run in. Queue files are local JSON under `<queue>/events`, `<queue>/jobs`, `<queue>/done`, and `<queue>/failed`, and `FM_HOOK_QUEUE` overrides the default queue root.
 
 An earlier version defaulted to the relative path `.fm-hooks/queue`, so repositories an agent ran in may still contain one. On the first run against the default queue, fm-hooks adopts such a legacy directory: it copies the events, the JSONL log, and the worker outcome records into `<queue>/migrated/<repo-key>/`, re-queues any pending jobs into `<queue>/jobs`, writes a `MIGRATED.json` marker, and prints a one-time notice on stderr naming both locations. It never moves, deletes, or creates anything inside the repository, and the legacy directory is left in place for the operator to delete. Adoption is per legacy directory and is idempotent, and an explicit `FM_HOOK_QUEUE` adopts nothing because the operator then owns the layout.
+
+### Supervising the worker
+
+Rules do not fire because a hook ran; they fire because something drains the queue. Observation and execution are deliberately separate processes — the hook must stay inside the tool's latency budget, and a queued action must not be able to fail a completed Firstmate call — which means **the entire rule-evaluation half of fm-hooks is inert unless a worker is running.** This is not a theoretical risk: the repository shipped a worker that drained the queue once and exited, there was nothing to supervise, nothing supervised it, and no `jobs/`, `done/`, or `failed/` directory was ever created on a live queue. A correct-looking worker and a working observation log are not evidence that rules fire.
+
+`bin/fm-hooks-worker.js` is the operator surface. Use `status` first — it answers the only question that matters, and it answers it as data:
+
+    node bin/fm-hooks-worker.js status            # JSON liveness report; exit 1 when rules are not live
+    node bin/fm-hooks-worker.js status --stale-after 30000
+
+`status` reports presence and progress separately and only calls a worker **alive** when its pid exists *and* its heartbeat is advancing. That distinction is the whole point: a pid in the process table proves a process started, not that it is working, and a worker whose pid is present but whose beat has stopped is wedged. `ruleEvaluationLive` is the field to act on. A live supervisor over a dead worker reports `false`, because the parent running does not make the child work.
+
+Three processes, three roles:
+
+- **worker** (`src/worker.js --watch`) stays resident and drains the queue every `--interval` ms. It beats to `<queue>/worker/worker.json` on *every* cycle, including idle ones, so an idle-but-healthy worker is distinguishable from a hung one. It also appends `{"type":"worker","phase":"start"|"cycle"|"beat"|"stop",...}` to `events.jsonl`, so a single `tail -f events.jsonl` shows both halves of the pipeline: what was observed, and who is draining it.
+- **supervisor** (`src/worker.js --supervise`) runs the worker as a child and restarts it whenever it exits, with capped exponential backoff. Every restart is counted in `<queue>/worker/supervisor.json`, so a crash-looping worker looks like a crash-looping worker rather than a healthy one with a low job count.
+- **launchd** (`fm-hooks-worker install`) keeps the supervisor alive across crashes and reboot, under the per-user label `com.fm-hooks.worker`. It writes only `~/Library/LaunchAgents/com.fm-hooks.worker.plist`, carrying only the environment fm-hooks actually resolves against (`FM_HOOK_QUEUE`, `FM_HOOK_*`, `FM_HOME`, `XDG_STATE_HOME`, `HOME`, `PATH`) — never the caller's whole environment. `install` is idempotent, `uninstall` boots out and removes exactly what `install` wrote, and `plist` prints the file without touching launchd.
+
+    node bin/fm-hooks-worker.js install --interval 1000   # launchd supervises the supervisor
+    node bin/fm-hooks-worker.js uninstall
+    npm run worker:status
+
+Both processes handle `SIGINT`/`SIGTERM` and leave a final beat, so a stopped worker reads as stopped rather than as a stale gap. `--interval` set on a supervised launch is passed through `FM_HOOK_WORKER_INTERVAL_MS`, the only channel a plist has.
+
+Rules are still only as good as the rule file. With no rules file, or a rule set that matches nothing, a perfectly healthy worker drains an empty queue forever and reports `processed: 0` — alive and correct, doing nothing. Check `processed` and `lastResultAt`, not just `ruleEvaluationLive`.
+
+### Heartbeat files
+
+`<queue>/worker/worker.json` and `<queue>/worker/supervisor.json` hold one record per role, written through a temporary file and renamed so a reader never sees a partial beat and mistakes a busy worker for a dead one. Each records `pid`, `startedAt`, `updatedAt`, and the worker's `cycles`, `processed`, `done`, `failed`, `intervalMs`, `lastResultAt`, and `lastError`; the supervisor's adds `restarts` and `lastExit`. Files are mode 0600 and hold no command output or action payloads. A worker that dies mid-cycle leaves its last count intact rather than resetting it, so an unexplained drop in `processed` is visible after a restart.
 
 `events.jsonl` is bounded. Once it reaches `FM_HOOK_EVENT_LOG_MAX_BYTES` (default 5 MiB) it rolls to `events.jsonl.1`: the oldest retained roll is dropped, older rolls shift down, and the live log restarts. `FM_HOOK_EVENT_LOG_KEEP` (default 3) sets how many rolls are kept, bounding the log at roughly `FM_HOOK_EVENT_LOG_MAX_BYTES x (FM_HOOK_EVENT_LOG_KEEP + 1)`. Setting `FM_HOOK_EVENT_LOG_MAX_BYTES=0` disables rotation explicitly.
 
@@ -116,7 +145,7 @@ A call is a Firstmate call when its command basename matches `/^fm[-_][A-Za-z0-9
 npm test
 ```
 
-Tests use harmless command strings and temporary directories only; they never invoke Firstmate or a configured action. The suite covers quoted args, command lists, false positives, equivalent Claude/OpenCode event normalization, unknown/failure outcome handling, the `fm_dispatch -> verification` and `fm_scout -> report review` rules, duplicate event delivery, durable job consumption, and action queue idempotency. A dedicated suite covers state-path resolution: that the default queue root is absolute and independent of the working directory, the override precedence chain, legacy-queue adoption and its idempotence, event-log rotation bounds, and an end-to-end run of the real adapters inside a scratch `git` repository asserting `git status --porcelain` is unchanged. For a live harness smoke test, use harmless fixture commands such as `printf marker`, `sh -c 'exit 7'`, and deliberately non-side-effecting `fm_dispatch`-shaped fixture text in a disposable configuration. Never run real task actions during adapter tests.
+Tests use harmless command strings and temporary directories only; they never invoke Firstmate or a configured action. The suite covers quoted args, command lists, false positives, equivalent Claude/OpenCode event normalization, unknown/failure outcome handling, the `fm_dispatch -> verification` and `fm_scout -> report review` rules, duplicate event delivery, durable job consumption, and action queue idempotency. A dedicated suite covers state-path resolution: that the default queue root is absolute and independent of the working directory, the override precedence chain, legacy-queue adoption and its idempotence, event-log rotation bounds, and an end-to-end run of the real adapters inside a scratch `git` repository asserting `git status --porcelain` is unchanged. A third suite covers the supervised worker: watch mode draining a queued rule action and asserting the action's own side effect on disk rather than the worker's opinion of it, a non-matching outcome enqueuing nothing, a never-run queue reporting dead, a running-but-silent worker reporting dead, supervisor restart counting, a live supervisor over a dead worker reporting not-live, a real resident `supervise` process draining a real queue end to end, CLI status exit codes, and the launchd plist's contents. For a live harness smoke test, use harmless fixture commands such as `printf marker`, `sh -c 'exit 7'`, and deliberately non-side-effecting `fm_dispatch`-shaped fixture text in a disposable configuration. Never run real task actions during adapter tests.
 
 ## Compatibility gaps
 

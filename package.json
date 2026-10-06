@@ -8,6 +8,9 @@
   "scripts": {
     "test": "node --test",
     "hook:claude": "node src/claude-hook.js",
-    "worker": "node src/worker.js"
+    "worker": "node src/worker.js",
+    "worker:watch": "node src/worker.js --watch",
+    "worker:supervise": "node src/worker.js --supervise",
+    "worker:status": "node bin/fm-hooks-worker.js status"
   }
 }
