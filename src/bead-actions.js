@@ -105,6 +105,18 @@ export async function describeCall(event, env = process.env) {
     const project = args[1] ? basename(args[1].replace(/\/+$/, '')) : null;
     return { verb: 'dispatched', task: first, project, line: `dispatched ${first}${project ? ` on ${project}` : ''}` };
   }
+  if (op === 'fm-brief.sh' && taskLike) {
+    // `fm-brief.sh <task> <repo> ...`; a secondmate charter has a flag in the repo slot and no single project
+    const project = args[1] && !args[1].startsWith('-') ? basename(args[1].replace(/\/+$/, '')) : null;
+    return { verb: 'briefed', task: first, project, line: `wrote brief for ${first}${project ? ` on ${project}` : ''}` };
+  }
+  if (op === 'fm-fleet-sync.sh') {
+    // `fm-fleet-sync.sh [<project-dir-or-name>]`; with no argument the whole fleet synced, which
+    // belongs to no single project, so it is noted on the fleet's own project bead.
+    const named = first && !first.startsWith('-') ? basename(first.replace(/\/+$/, '')) : null;
+    const project = named ?? env.FM_HOOK_FLEET_PROJECT ?? 'firstmate';
+    return { verb: 'synced', project, line: named ? `synced project clone ${named}` : 'synced all project clones' };
+  }
   if (op === 'fm-pr-merge.sh' && taskLike) {
     const meta = await readMeta(first, env, event);
     return { verb: 'merged', task: first, project: meta.project ? basename(meta.project) : null,

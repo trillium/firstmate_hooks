@@ -131,7 +131,12 @@ Rule actions write what happened into beads (fm -> bead); a separate poller carr
 | `fm-spawn-project-comment` | `fm-spawn.sh <task> <project>` success | comment on the project's bead |
 | `fm-pr-merge-project-comment`, `fm-merge-local-project-comment` | success | comment on the project's bead (project read from `state/<task>.meta`) |
 | `fm-branch-outcome-project-comment` | `fm-branch-outcome.sh append` success | comment; a `--verdict captain` outcome also files a `review` item |
+| `fm-brief-project-comment` | `fm-brief.sh <task> <repo>` success | comment on the repo's project bead (a `--secondmate` charter names no repo and is ledger-only) |
+| `fm-fleet-sync-project-comment` | `fm-fleet-sync.sh [<project>]` success | comment on that project's bead; with no argument, on the fleet project (`FM_HOOK_FLEET_PROJECT`, default `firstmate`) |
+| `fm-brief-failure`, `fm-fleet-sync-failure`, `fm-send-failure` | failure | one deduplicated `task` card per rule per UTC day (`fm-hooks-task-card.sh`) |
 | `fm-captain-hold-review` | `fm-captain-hold.sh hold` success | a `human`-labelled `review` bead carrying `fm-task:<task>` and `fm-key:captain-hold-<task>-<n>` |
+
+`fm-tasks-axi.sh`, `fm-inbox.sh`, `fm-wake-drain.sh`, `fm-crew-state.sh` and `fm-send.sh` success are covered by `fm-ledger-timeline` alone; `fm-wake-drain.sh` and `fm-crew-state.sh` are deliberately ledger-only on failure too (noise).
 
 Help output and read-only subcommands (`lookup`, `open`, `--help`) succeed too and write nothing. The project bead is the one labelled `project:<name>` (title equal to the name preferred); if none exists, `project-fmh-<name>` is minted once and reused. A call whose project cannot be resolved is a visible skip (the ledger still has its line).
 

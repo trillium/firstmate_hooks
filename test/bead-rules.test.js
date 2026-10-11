@@ -48,7 +48,8 @@ test('the shipped rule set is valid and every action is a fixed command with str
     assert.ok(rule.outcomes.length && rule.action.args.every(arg => typeof arg === 'string'), rule.id);
   }
   for (const id of ['fm-ledger-timeline', 'fm-spawn-project-comment', 'fm-pr-merge-project-comment',
-    'fm-merge-local-project-comment', 'fm-branch-outcome-project-comment', 'fm-captain-hold-review']) {
+    'fm-merge-local-project-comment', 'fm-branch-outcome-project-comment', 'fm-captain-hold-review',
+    'fm-brief-failure', 'fm-fleet-sync-failure', 'fm-send-failure', 'fm-brief-project-comment', 'fm-fleet-sync-project-comment']) {
     assert.ok(ids.includes(id), `${id} is shipped`);
   }
 });
@@ -89,6 +90,37 @@ test('end to end: a store outage fails the job into failed/ and a later drain af
   assert.ok(failed.some(r => r.outcome === 'failed'));
   const state = await ctx.db();
   assert.equal(state.lifespan?.beads?.['lifespan-fmh20261010'], undefined, 'nothing half-written');
+}));
+
+test('rules: brief and fleet-sync comment on success, brief/fleet-sync/send open a card on failure, noisy calls are ledger-only', async () => {
+  const { rules } = JSON.parse(await readFile(RULES, 'utf8'));
+  const firing = (operation, outcome) => rules.filter(rule => (rule.operation === operation || rule.operation === '*')
+    && rule.outcomes.includes(outcome)).map(rule => rule.id).sort();
+  assert.deepEqual(firing('fm-brief.sh', 'success'), ['fm-brief-project-comment', 'fm-ledger-timeline']);
+  assert.deepEqual(firing('fm-fleet-sync.sh', 'success'), ['fm-fleet-sync-project-comment', 'fm-ledger-timeline']);
+  for (const [op, id] of [['fm-brief.sh', 'fm-brief-failure'], ['fm-fleet-sync.sh', 'fm-fleet-sync-failure'], ['fm-send.sh', 'fm-send-failure']]) {
+    assert.deepEqual(firing(op, 'failure'), [id, 'fm-ledger-timeline'].sort());
+  }
+  assert.deepEqual(firing('fm-send.sh', 'success'), ['fm-ledger-timeline']);
+  for (const op of ['fm-tasks-axi.sh', 'fm-inbox.sh', 'fm-wake-drain.sh', 'fm-crew-state.sh']) {
+    assert.deepEqual(firing(op, 'success'), ['fm-ledger-timeline'], `${op} success is ledger-only`);
+  }
+  for (const op of ['fm-wake-drain.sh', 'fm-crew-state.sh']) assert.deepEqual(firing(op, 'failure'), ['fm-ledger-timeline']);
+});
+
+test('end to end: a successful fm-brief and fm-fleet-sync each comment on their project once', async () => withStubs(async ctx => {
+  const calls = [{ id: 'b', raw: '/h/bin/fm-brief.sh task-a demo --mode local-only' }, { id: 's', raw: '/h/bin/fm-fleet-sync.sh' },
+    { id: 's2', raw: '/h/bin/fm-fleet-sync.sh /h/projects/demo' }, { id: 'sm', raw: '/h/bin/fm-brief.sh sm-1 --secondmate --no-projects' }];
+  await pipeline(ctx, calls);
+  const before = (await ctx.writes()).length;
+  await pipeline(ctx, calls);
+  assert.equal((await ctx.writes()).length, before, 're-delivery writes nothing');
+  const { projects, lifespan } = await ctx.db();
+  assert.match(projects.beads['project-fmh-demo'].comments.map(c => c.text).join('\n'), /wrote brief for task-a on demo/);
+  assert.match(projects.beads['project-fmh-demo'].comments.map(c => c.text).join('\n'), /synced project clone demo/);
+  assert.match(projects.beads['project-fmh-firstmate'].comments[0].text, /synced all project clones/);
+  assert.equal(Object.values(projects.beads).flatMap(b => b.comments).length, 3, 'a secondmate charter names no project and is ledger-only');
+  assert.equal(lifespan.beads['lifespan-fmh20261010'].comments.length, 4);
 }));
 
 const fixtureHealth = async (root, { pending = 0, ageMs = 0, rules = true } = {}) => {

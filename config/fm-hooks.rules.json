@@ -37,6 +37,24 @@
       "action": { "command": "fm-hooks-task-card.sh", "args": ["{operation}", "{correlationId}", "{ruleId}"] }
     },
     {
+      "id": "fm-brief-failure",
+      "operation": "fm-brief.sh",
+      "outcomes": ["failure"],
+      "action": { "command": "fm-hooks-task-card.sh", "args": ["{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-fleet-sync-failure",
+      "operation": "fm-fleet-sync.sh",
+      "outcomes": ["failure"],
+      "action": { "command": "fm-hooks-task-card.sh", "args": ["{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-send-failure",
+      "operation": "fm-send.sh",
+      "outcomes": ["failure"],
+      "action": { "command": "fm-hooks-task-card.sh", "args": ["{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
       "id": "fm-kill-task-verify",
       "operation": "fm-kill-task.sh",
       "outcomes": ["success"],
@@ -51,6 +69,18 @@
     {
       "id": "fm-spawn-project-comment",
       "operation": "fm-spawn.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["project-comment", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-brief-project-comment",
+      "operation": "fm-brief.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["project-comment", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-fleet-sync-project-comment",
+      "operation": "fm-fleet-sync.sh",
       "outcomes": ["success"],
       "action": { "command": "fm-hooks-bead-action", "args": ["project-comment", "{operation}", "{correlationId}", "{ruleId}"] }
     },

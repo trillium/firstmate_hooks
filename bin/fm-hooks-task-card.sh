@@ -59,6 +59,21 @@ case "$rule_id" in
     type=bug; priority=1
     why="Workflow lint is the check that catches a malformed workflow before merge. A failure here means that gate is not running as intended."
     ;;
+  fm-brief-failure)
+    title="fm-hooks: fm-brief.sh failed - a crew brief was not written ($day)"
+    type=bug; priority=1
+    why="A failed brief means the task has no brief.md to dispatch from. Re-run the scaffold and confirm data/<task>/brief.md exists before spawning."
+    ;;
+  fm-fleet-sync-failure)
+    title="fm-hooks: fm-fleet-sync.sh failed - project clones may have drifted ($day)"
+    type=bug; priority=1
+    why="A failed fleet sync leaves project clones behind origin, so new worktrees start from a stale default branch. Re-run it and read the STUCK lines."
+    ;;
+  fm-send-failure)
+    title="fm-hooks: fm-send.sh failed - a message to a crew was not delivered ($day)"
+    type=bug; priority=1
+    why="A failed send means a crew never received a steering message or a captain answer. Check its inbox and re-send."
+    ;;
   fm-kill-task-verify)
     title="fm-hooks: verify state released after fm-kill-task.sh ($day)"
     type=task; priority=2
