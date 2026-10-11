@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { runBeadAction } from '../src/bead-actions.js';
 
@@ -23,6 +24,8 @@ export async function main(argv, { log = console.log, error = console.error, env
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Resolved through realpath: the deployed action is a symlink on PATH, and import.meta.url is
+// the target, so comparing the unresolved argv would silently never run main.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   process.exitCode = await main(process.argv.slice(2));
 }

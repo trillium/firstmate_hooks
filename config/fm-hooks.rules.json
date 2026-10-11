@@ -41,6 +41,42 @@
       "operation": "fm-kill-task.sh",
       "outcomes": ["success"],
       "action": { "command": "fm-hooks-task-card.sh", "args": ["{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-ledger-timeline",
+      "operation": "*",
+      "outcomes": ["success", "failure", "unknown"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["ledger", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-spawn-project-comment",
+      "operation": "fm-spawn.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["project-comment", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-pr-merge-project-comment",
+      "operation": "fm-pr-merge.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["project-comment", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-merge-local-project-comment",
+      "operation": "fm-merge-local.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["project-comment", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-branch-outcome-project-comment",
+      "operation": "fm-branch-outcome.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["project-comment", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-captain-hold-review",
+      "operation": "fm-captain-hold.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["captain-hold", "{operation}", "{correlationId}", "{ruleId}"] }
     }
   ]
 }

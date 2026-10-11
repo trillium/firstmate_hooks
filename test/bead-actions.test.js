@@ -4,7 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runBeadAction, callArgs, describeCall } from '../src/bead-actions.js';
 import { main as actionCli } from '../bin/fm-hooks-bead-action.js';
-import { withStubs } from './helpers/stub-env.js';
+import { withStubs } from '../testlib/stub-env.js';
 
 async function recordEvent(env, partial) {
   const event = { operation: 'fm-spawn.sh', args: [], rawCommand: 'x', cwd: '/tmp', harness: 'claude', sessionId: 'abcdef123456',

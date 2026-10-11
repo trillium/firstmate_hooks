@@ -11,6 +11,7 @@ import { workerStatus } from '../src/worker-status.js';
 const USAGE = `usage: fm-hooks-worker <command> [options]
 
   status                 report worker liveness as JSON and exit
+  health                 check rules are loaded, actions resolve, and jobs drain; exit 1 if not
   drain                  drain the queue once and exit
   watch                  stay resident, draining on every interval
   supervise              run the resident worker as a child and restart it if it exits
@@ -22,7 +23,8 @@ options:
   --queue DIR            queue root (default: the fm-hooks state root)
   --interval MS          poll interval for watch/supervise (default 1000)
   --stale-after MS       age at which a heartbeat counts as stale (default 15000)
-  --json                 force JSON output (status is always JSON)
+  --require-poller       health also fails when the bead poller is not live
+  --json                 force JSON output (status and health are always JSON)
 `;
 
 export function parseArgv(argv) {
@@ -34,6 +36,7 @@ export function parseArgv(argv) {
     else if (arg === '--interval') { options.intervalMs = Number(value()); options.intervalSet = true; }
     else if (arg === '--stale-after') options.staleAfterMs = Number(value());
     else if (arg === '--json') options.json = true;
+    else if (arg === '--require-poller') options.requirePoller = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
@@ -51,6 +54,14 @@ export async function main(argv, { log = console.log, error = console.error } = 
     // Non-zero when rule evaluation is not live, so this is usable as a health check
     // and not only as something a human reads.
     return status.ruleEvaluationLive ? 0 : 1;
+  }
+
+  if (options.command === 'health') {
+    const { healthStatus } = await import('../src/health.js');
+    const health = await healthStatus({ root, staleAfterMs: options.staleAfterMs, requirePoller: options.requirePoller });
+    log(JSON.stringify(health, null, 2));
+    for (const problem of health.problems) error(`fm-hooks health: ${problem}`);
+    return health.healthy ? 0 : 1;
   }
 
   if (options.command === 'plist') {
