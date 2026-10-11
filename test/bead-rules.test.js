@@ -57,14 +57,16 @@ test('the shipped rule set is valid and every action is a fixed command with str
 test('end to end: a successful fm-spawn call becomes a ledger line and a project comment, once', async () => withStubs(async ctx => {
   const call = { raw: '/h/bin/fm-spawn.sh task-a /h/projects/demo --mode direct-PR 2>&1 | tail -4' };
   const results = await pipeline(ctx, [call]);
-  assert.deepEqual(results.map(r => r.outcome), ['done', 'done']);
+  assert.deepEqual(results.map(r => r.outcome), ['done', 'done', 'done']);
   // the same hook delivery observed again re-runs the actions (the first job is already
   // in done/) and must write nothing new: idempotence lives in the store, not the queue
   const before = (await ctx.writes()).length;
-  assert.equal((await pipeline(ctx, [call])).length, 2);
+  assert.equal((await pipeline(ctx, [call])).length, 3);
   assert.equal((await ctx.writes()).length, before, 'a re-delivery performs no bead write');
   const state = await ctx.db();
   assert.equal(state.lifespan.beads['lifespan-fmh20261010'].comments.length, 1);
+  assert.equal(state.fleet.beads['fleet-task-a'].comments.length, 1);
+  assert.ok(state.fleet.beads['fleet-task-a'].labels.includes('fm-state:dispatched'));
   assert.match(state.projects.beads['project-fmh-demo'].comments[0].text, /dispatched task-a on demo/);
 }));
 
@@ -96,14 +98,18 @@ test('rules: brief and fleet-sync comment on success, brief/fleet-sync/send open
   const { rules } = JSON.parse(await readFile(RULES, 'utf8'));
   const firing = (operation, outcome) => rules.filter(rule => (rule.operation === operation || rule.operation === '*')
     && rule.outcomes.includes(outcome)).map(rule => rule.id).sort();
-  assert.deepEqual(firing('fm-brief.sh', 'success'), ['fm-brief-project-comment', 'fm-ledger-timeline']);
+  assert.deepEqual(firing('fm-brief.sh', 'success'), ['fm-brief-fleet', 'fm-brief-project-comment', 'fm-ledger-timeline']);
   assert.deepEqual(firing('fm-fleet-sync.sh', 'success'), ['fm-fleet-sync-project-comment', 'fm-ledger-timeline']);
   for (const [op, id] of [['fm-brief.sh', 'fm-brief-failure'], ['fm-fleet-sync.sh', 'fm-fleet-sync-failure'], ['fm-send.sh', 'fm-send-failure']]) {
     assert.deepEqual(firing(op, 'failure'), [id, 'fm-ledger-timeline'].sort());
   }
-  assert.deepEqual(firing('fm-send.sh', 'success'), ['fm-ledger-timeline']);
+  assert.deepEqual(firing('fm-send.sh', 'success'), ['fm-ledger-timeline', 'fm-send-fleet']);
   for (const op of ['fm-tasks-axi.sh', 'fm-inbox.sh', 'fm-wake-drain.sh', 'fm-crew-state.sh']) {
     assert.deepEqual(firing(op, 'success'), ['fm-ledger-timeline'], `${op} success is ledger-only`);
+  }
+  for (const op of ['fm-spawn.sh', 'fm-control.sh', 'fm-promote.sh', 'fm-pr-merge.sh', 'fm-merge-local.sh', 'fm-teardown.sh', 'fm-captain-hold.sh']) {
+    assert.ok(firing(op, 'success').includes(`${op.replace(/^fm-|\.sh$/g, '').replace(/^/, 'fm-')}-fleet`), `${op} success feeds the fleet bead`);
+    assert.deepEqual(firing(op, 'failure').filter(id => id.endsWith('-fleet')), [], `${op} failure never writes the fleet bead`);
   }
   for (const op of ['fm-wake-drain.sh', 'fm-crew-state.sh']) assert.deepEqual(firing(op, 'failure'), ['fm-ledger-timeline']);
 });

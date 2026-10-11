@@ -125,3 +125,15 @@ test('watch writes a heartbeat that status reads as alive, then stale', async ()
   assert.equal(stale.alive, false);
   assert.match(stale.reason, /stale/);
 }));
+
+test('a bead fm-hooks closed itself after a hold answer is neither relayed nor failed; without the label it still is', async () => withStubs(async ({ env }) => {
+  const { sent, relay } = recorder();
+  await pollOnce({ root: root(env), env, relay, now: T0 });
+  await seed(env, 'review', { id: 'review-guarded', title: 'hold', status: 'closed', closed_at: '2026-10-10T12:01:00Z',
+    labels: ['fm-task:t', 'fm-key:k', 'fm-closed-by:fm-hooks'] });
+  await seed(env, 'review', { id: 'review-human', title: 'hold', status: 'closed', closed_at: '2026-10-10T12:01:30Z',
+    labels: ['fm-task:t', 'fm-key:k2'] });
+  const result = await pollOnce({ root: root(env), env, relay, now: T0 + 120000 });
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(sent.map(s => s.key), ['k2']);
+}));

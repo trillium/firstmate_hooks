@@ -2,12 +2,15 @@
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { queueRoot } from '../src/paths.js';
+import { tailStatusOnce } from '../src/status-tail.js';
+import { storeRunner } from '../src/bead-actions.js';
 import { pollOnce, pollerStatus, watchPoller } from '../src/bead-poller.js';
 
 const USAGE = `usage: fm-hooks-bead-poller <command> [options]
 
   once                   poll once, relay each newly closed human/review bead, exit
-  watch                  stay resident, polling on every interval
+  watch                  stay resident, polling on every interval (also tails crew status files)
+  status-tail --once     record new crew status lines on their fleet beads once, exit
   status                 report poller liveness as JSON; exit 1 if it is not polling
   install                write and load the launchd agent that keeps the poller alive
   uninstall              boot out and remove the launchd agent
@@ -27,6 +30,7 @@ export function parseArgv(argv) {
     if (arg === '--queue') options.root = value();
     else if (arg === '--interval') options.intervalMs = Number(value());
     else if (arg === '--since') options.since = value();
+    else if (arg === '--once') options.once = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
@@ -41,6 +45,12 @@ export async function main(argv, { log = console.log, error = console.error, env
     const result = await pollOnce({ root, env, since: options.since });
     log(JSON.stringify(result, null, 2));
     return result.failed.length ? 1 : 0;
+  }
+  if (options.command === 'status-tail') {
+    if (!options.once) { error('fm-hooks-bead-poller: status-tail runs inside `watch`; pass --once to run a single pass'); return 2; }
+    const result = await tailStatusOnce({ root, env, run: storeRunner(env) });
+    log(JSON.stringify(result, null, 2));
+    return result.failed?.length ? 1 : 0;
   }
   if (options.command === 'status') {
     const status = await pollerStatus({ root });

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { queueRoot } from './paths.js';
+import { fleetAction } from './fleet-beads.js';
 import { MINTED_PREFIX, resolveProjectBead } from './project-beads.js';
 
 // Rule actions that write the outcome of a Firstmate call into beads.
@@ -16,12 +17,12 @@ import { MINTED_PREFIX, resolveProjectBead } from './project-beads.js';
 // Stores are reached only through their wrapper CLIs (`projects`, `review`, `lifespan`),
 // never bare `bd`, as an argv with no shell. FM_HOOK_<STORE>_BIN overrides a wrapper.
 
-export const KINDS = ['ledger', 'project-comment', 'captain-hold'];
+export const KINDS = ['ledger', 'project-comment', 'captain-hold', 'fleet'];
 
 const hex = (value, length) => createHash('sha256').update(value).digest('hex').slice(0, length);
-const clip = (value, max) => (String(value).length > max ? `${String(value).slice(0, max - 1)}…` : String(value));
+export const clip = (value, max) => (String(value).length > max ? `${String(value).slice(0, max - 1)}…` : String(value));
 const slug = value => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-const marker = correlationId => `[cid:${correlationId.slice(0, 16)}]`;
+export const marker = correlationId => `[cid:${correlationId.slice(0, 16)}]`;
 
 export function storeRunner(env = process.env) {
   return (store, args) => {
@@ -30,11 +31,11 @@ export function storeRunner(env = process.env) {
   };
 }
 
-const exists = (run, store, id) => {
+export const exists = (run, store, id) => {
   try { run(store, ['show', id]); return true; } catch { return false; }
 };
 
-function commentTexts(run, store, id) {
+export function commentTexts(run, store, id) {
   const out = run(store, ['comments', id, '--json']);
   const parsed = out.trim() ? JSON.parse(out) : [];
   return parsed.map(comment => String(comment.text ?? comment.body ?? ''));
@@ -42,14 +43,14 @@ function commentTexts(run, store, id) {
 
 // Add a comment once. The marker is part of the text, so a re-delivered job finds its
 // own earlier comment and stops.
-function commentOnce(run, store, id, correlationId, text) {
+export function commentOnce(run, store, id, correlationId, text) {
   const tag = marker(correlationId);
   if (commentTexts(run, store, id).some(existing => existing.includes(tag))) return false;
   run(store, ['comments', 'add', id, `${text} ${tag}`]);
   return true;
 }
 
-function createOnce(run, store, id, fields) {
+export function createOnce(run, store, id, fields) {
   if (exists(run, store, id)) return false;
   const args = ['create', '--id', id, '--silent', '--title', fields.title, '-t', fields.type ?? 'task',
     '-p', String(fields.priority ?? 2), '-l', fields.labels.join(','), '-d', fields.body];
@@ -83,7 +84,7 @@ export function flagValue(args, flag) {
   return index >= 0 && index + 1 < args.length ? args[index + 1] : null;
 }
 
-async function readMeta(taskId, env, event) {
+export async function readMeta(taskId, env, event) {
   const home = env.FM_HOME || event.cwd;
   if (!home || !taskId) return {};
   try {
@@ -135,6 +136,9 @@ export async function describeCall(event, env = process.env) {
     return { verb: 'outcome', task, verdict, project: meta.project ? basename(meta.project) : null,
       line: `branch outcome for ${task ?? '?'} (${verdict ?? '?'}): ${clip(flagValue(args, '--summary') ?? '', 200)}` };
   }
+  if (op === 'fm-captain-hold.sh' && first === 'answer' && args[1] && !args[1].startsWith('-')) {
+    return { verb: 'answer', task: args[1], decisionFile: flagValue(args, '--decision-file') };
+  }
   if (op === 'fm-captain-hold.sh' && first === 'hold' && args[1] && !args[1].startsWith('-')) {
     return { verb: 'hold', task: args[1], reason: flagValue(args, '--reason') ?? 'no reason given',
       title: flagValue(args, '--title') };
@@ -184,8 +188,30 @@ async function projectComment(run, event, call, env) {
   return result;
 }
 
+export const CLOSED_BY = 'fm-closed-by:fm-hooks';
+
+// `fm-captain-hold.sh answer` already delivered the captain's decision to Firstmate, so the
+// open review bead for that hold is closed here -- and marked, so the poller does not relay
+// the same answer a second time as a bead closure.
+async function answerHold(run, event, call) {
+  const open = JSON.parse(run('review', ['list', '--status', 'open', '-l', `fm-hold-task:${call.task}`, '--json', '-n', '0']) || '[]');
+  if (!open.length) return { skipped: `no open hold for ${call.task}` };
+  let decision = `decision file ${call.decisionFile ?? '(none given)'} not readable at action time`;
+  if (call.decisionFile) { try { decision = (await readFile(call.decisionFile, 'utf8')).trim() || decision; } catch { /* keep the note */ } }
+  const closed = [];
+  for (const bead of open) {
+    commentOnce(run, 'review', bead.id, event.correlationId, `fm-hooks: captain answered via fm-captain-hold.sh: ${clip(decision, 1500)}`);
+    // Label first, close second: a closure the poller can see always already carries the label.
+    run('review', ['label', 'add', bead.id, CLOSED_BY]);
+    run('review', ['close', bead.id, '-r', 'answered via fm-captain-hold.sh answer']);
+    closed.push(bead.id);
+  }
+  return { closed };
+}
+
 function captainHold(run, event, call) {
   if (!call) return { skipped: 'not a hold' };
+  if (call.verb === 'answer') return answerHold(run, event, call);
   const id = `review-fmh${hex(event.correlationId, 8)}`;
   if (exists(run, 'review', id)) return { target: id, wrote: false };
   // Firstmate keys a hold `captain-hold-<task>-<n>`; n is one past the holds this task
@@ -203,6 +229,7 @@ export async function runBeadAction({ kind, operation, correlationId, env = proc
   if (!KINDS.includes(kind)) throw new Error(`unknown bead action "${kind}" (expected ${KINDS.join(', ')})`);
   const event = await loadEvent(operation, correlationId, root);
   if (kind === 'ledger') return ledger(run, event);
+  if (kind === 'fleet') return fleetAction(run, event, env);
   const call = await describeCall(event, env);
   return kind === 'captain-hold' ? captainHold(run, event, call) : projectComment(run, event, call, env);
 }

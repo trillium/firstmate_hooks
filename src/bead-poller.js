@@ -5,7 +5,9 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { DEFAULT_STALE_MS, pidAlive, readHeartbeat, writeHeartbeat } from './heartbeat.js';
+import { CLOSED_BY, storeRunner } from './bead-actions.js';
 import { queueRoot } from './paths.js';
+import { tailStatusOnce } from './status-tail.js';
 
 // bead -> Firstmate. The rule actions write beads; this closes the other direction.
 //
@@ -121,6 +123,9 @@ export async function pollOnce({ root = queueRoot(), env = process.env, stores =
     for (const bead of beads.sort((a, b) => String(a.closed_at).localeCompare(String(b.closed_at)))) {
       const ledgerKey = `${store}:${bead.id}:${bead.closed_at}`;
       if (!bead.closed_at || cursor.relayed[ledgerKey]) continue;
+      // fm-hooks closed this one itself after `fm-captain-hold.sh answer` already delivered the
+      // answer to Firstmate; relaying the closure would deliver it twice.
+      if ((bead.labels ?? []).includes(CLOSED_BY)) continue;
       try {
         const comments = JSON.parse((await cli(store, ['comments', bead.id, '--json'])) || '[]');
         const closure = describeClosure(store, bead, comments);
@@ -148,7 +153,8 @@ export async function watchPoller({ root = queueRoot(), env = process.env, inter
   onResult = r => console.log(JSON.stringify(r)), ...options } = {}) {
   const pollMs = Number.isFinite(intervalMs) ? intervalMs : Number(env.FM_HOOK_POLL_INTERVAL_MS) || DEFAULT_POLL_MS;
   const startedAt = new Date().toISOString();
-  const state = { startedAt, cycles: 0, relayed: 0, failed: 0, lastPollAt: null, lastError: null };
+  const state = { startedAt, cycles: 0, relayed: 0, failed: 0, statusLines: 0, lastPollAt: null, lastError: null };
+  const tailing = env.FM_HOOK_STATUS_TAIL !== '0';
   while (!signal?.aborted) {
     try {
       const result = await pollOnce({ root, env, ...options });
@@ -156,6 +162,13 @@ export async function watchPoller({ root = queueRoot(), env = process.env, inter
       state.lastError = result.failed.length ? `${result.failed[0].store}: ${result.failed[0].error}` : null;
       if (result.relayed.length || result.failed.length) onResult({ type: 'poll', ...result });
     } catch (error) { state.lastError = String(error); }
+    if (tailing) {
+      try {
+        const tail = await tailStatusOnce({ root, env, run: storeRunner(env) });
+        state.statusLines += tail.recorded?.filter(r => r.wrote).length ?? 0;
+        if (tail.failed?.length) state.lastError = `status-tail ${tail.failed[0].task}: ${tail.failed[0].error}`;
+      } catch (error) { state.lastError = `status-tail: ${String(error)}`; }
+    }
     state.cycles += 1; state.lastPollAt = new Date().toISOString();
     await writeHeartbeat(root, { ...state, intervalMs: pollMs }, 'poller').catch(() => {});
     if (state.cycles >= maxCycles || signal?.aborted) break;

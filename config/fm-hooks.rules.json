@@ -107,6 +107,60 @@
       "operation": "fm-captain-hold.sh",
       "outcomes": ["success"],
       "action": { "command": "fm-hooks-bead-action", "args": ["captain-hold", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-brief-fleet",
+      "operation": "fm-brief.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-spawn-fleet",
+      "operation": "fm-spawn.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-control-fleet",
+      "operation": "fm-control.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-promote-fleet",
+      "operation": "fm-promote.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-pr-merge-fleet",
+      "operation": "fm-pr-merge.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-merge-local-fleet",
+      "operation": "fm-merge-local.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-teardown-fleet",
+      "operation": "fm-teardown.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-send-fleet",
+      "operation": "fm-send.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
+      "id": "fm-captain-hold-fleet",
+      "operation": "fm-captain-hold.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["fleet", "{operation}", "{correlationId}", "{ruleId}"] }
     }
   ]
 }

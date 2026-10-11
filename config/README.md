@@ -33,6 +33,12 @@ README for behaviour): `fm-ledger-timeline` (every `fm-*` call), `fm-spawn-proje
 `fm-branch-outcome-project-comment`, and `fm-captain-hold-review`. They share the
 idempotence contract below, enforced in the store rather than by the queue.
 
+Nine `*-fleet` rules (`fm-brief-fleet`, `fm-spawn-fleet`, `fm-control-fleet`, `fm-promote-fleet`,
+`fm-pr-merge-fleet`, `fm-merge-local-fleet`, `fm-teardown-fleet`, `fm-send-fleet`,
+`fm-captain-hold-fleet`) fire on success only and write one comment on the task's bead in the
+`fleet` store. The store must exist: `brain stores create fleet` (fm-hooks runs it itself on first
+use unless `FM_HOOK_FLEET_AUTOCREATE=0`). The poller's status-file tail feeds the same beads.
+
 ## Idempotency and rate
 
 Queue delivery is at-least-once across a crash window, so the action is written to be

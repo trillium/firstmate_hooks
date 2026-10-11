@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // A fake bead-store wrapper for tests. State lives in a JSON file named by STUB_DB and
 // every invocation is appended to STUB_CALLS, so a test can prove which writes happened.
-// It implements only the verbs fm-hooks uses: show, create, comments, list, close.
+// It implements only the verbs fm-hooks uses: show, create, comments, list, close, update, label add, reopen.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 const [store, ...argv] = process.argv.slice(2);
@@ -42,4 +42,18 @@ if (verb === 'show') {
 } else if (verb === 'close') {
   beads[argv[1]].status = 'closed'; beads[argv[1]].closed_at = take('--at')[0] ?? new Date().toISOString();
   beads[argv[1]].close_reason = take('-r', '--reason')[0] ?? null; save();
+} else if (verb === 'update') {
+  const bead = beads[argv[1]];
+  if (!bead) { console.error('not found'); process.exit(1); }
+  const remove = take('--remove-label');
+  bead.labels = bead.labels.filter(l => !remove.includes(l));
+  for (const l of take('--add-label')) if (!bead.labels.includes(l)) bead.labels.push(l);
+  if (take('--title').length) bead.title = take('--title')[0];
+  save();
+} else if (verb === 'label' && sub === 'add') {
+  const bead = beads[argv[2]];
+  if (!bead.labels.includes(argv[3])) bead.labels.push(argv[3]);
+  save();
+} else if (verb === 'reopen') {
+  beads[argv[1]].status = 'open'; beads[argv[1]].closed_at = null; save();
 } else { console.error(`stub: unsupported ${argv.join(' ')}`); process.exit(2); }

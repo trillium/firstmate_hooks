@@ -11,7 +11,7 @@ import { runBeadAction } from '../src/bead-actions.js';
 export async function main(argv, { log = console.log, error = console.error, env = process.env } = {}) {
   const [kind, operation, correlationId] = argv;
   if (!kind || !operation || !correlationId) {
-    error('usage: fm-hooks-bead-action <ledger|project-comment|captain-hold> <operation> <correlationId> [ruleId]');
+    error('usage: fm-hooks-bead-action <ledger|project-comment|captain-hold|fleet> <operation> <correlationId> [ruleId]');
     return 2;
   }
   try {
