@@ -183,7 +183,7 @@ function captainHold(run, event, call) {
   const wrote = createOnce(run, 'review', id, {
     title: `Captain hold: ${call.task} - ${clip(call.reason, 100)}`, priority: 1,
     labels: ['human', 'fm-hooks', 'fm-hold', `fm-hold-task:${call.task}`, `fm-task:${call.task}`, `fm-key:${key}`],
-    body: `${call.reason}\n\nFirstmate held task ${call.task} for the captain.\nAnswer with: review human respond ${id} "<decision>"\nThe answer is relayed to Firstmate (--resolve-key ${key}).\n\ncorrelationId: ${event.correlationId}` });
+    body: `${call.reason}\n\nFirstmate held task ${call.task} for the captain.\nAnswer with: review human respond ${id} "your decision"\nThe answer is relayed to Firstmate (--resolve-key ${key}).\n\ncorrelationId: ${event.correlationId}` });
   return { target: id, wrote, key };
 }
 

@@ -121,6 +121,34 @@ pi --extension "$PWD/src/pi-extension.js"
 
 This does not register a global extension or start a worker. The rules enqueue only `printf` fixture actions, and no worker is started. The test suite demonstrates the adapter by supplying harmless `fm_dispatch` / `fm_scout` fixture event data directly; those command strings are never executed.
 
+## Beads: both directions
+
+Rule actions write what happened into beads (fm -> bead); a separate poller carries the captain's answers back (bead -> fm). All store access goes through the wrapper CLIs (`projects`, `review`, `lifespan`), never bare `bd`; override one with `FM_HOOK_<STORE>_BIN`.
+
+| Rule | Fires on | Effect |
+|---|---|---|
+| `fm-ledger-timeline` | every recognized `fm-*` call, any outcome | one comment per call on the day's `lifespan-fmhYYYYMMDD` container bead |
+| `fm-spawn-project-comment` | `fm-spawn.sh <task> <project>` success | comment on the project's bead |
+| `fm-pr-merge-project-comment`, `fm-merge-local-project-comment` | success | comment on the project's bead (project read from `state/<task>.meta`) |
+| `fm-branch-outcome-project-comment` | `fm-branch-outcome.sh append` success | comment; a `--verdict captain` outcome also files a `review` item |
+| `fm-captain-hold-review` | `fm-captain-hold.sh hold` success | a `human`-labelled `review` bead carrying `fm-task:<task>` and `fm-key:captain-hold-<task>-<n>` |
+
+Help output and read-only subcommands (`lookup`, `open`, `--help`) succeed too and write nothing. The project bead is the one labelled `project:<name>` (title equal to the name preferred); if none exists, `project-fmh-<name>` is minted once and reused. A call whose project cannot be resolved is a visible skip (the ledger still has its line).
+
+**Idempotence.** Queue delivery is at-least-once, and a re-observed call re-runs its job once the first has moved to `done/`. So idempotence lives in the store, never in local state: created beads have ids derived from the correlation id, and every comment carries a `[cid:<correlation prefix>]` marker that is checked before writing. A re-delivery performs no write. A store failure exits non-zero, so the job lands in `failed/` instead of vanishing.
+
+**Poller (bead -> fm).** `bin/fm-hooks-bead-poller.js` finds `review` beads (and `human`-labelled beads in the other stores in `FM_HOOK_POLL_STORES`, default `review,task`) closed since its cursor and relays each once: a hold bead via `fm-send.sh <task> --resolve-key <key> <answer>`, any other via `fm-inbox.sh note --request-id <id>`. `brain human respond` adds a comment and closes, so a response is a closure. The first run starts at "now" and never backfills (`--since ISO` overrides it once). Cursor and relayed set live in `<queue>/poller/cursor.json`; the cursor never advances past a bead whose relay failed, a bead is marked relayed only after its relay succeeded, and a repeated note is a no-op through `--request-id`. A failed `--resolve-key` send falls back to a note so the answer still arrives. Relays go through `$FM_HOME/bin/fm-send.sh` and `fm-inbox.sh` (`FM_HOME` defaults to `~/fm_home/firstmate`; `FM_HOOK_FM_BIN_DIR` overrides the directory).
+
+```sh
+node bin/fm-hooks-bead-poller.js once|watch|status|plist|install|uninstall [--queue DIR] [--interval MS] [--since ISO]
+```
+
+`install` writes `~/Library/LaunchAgents/com.fm-hooks.bead-poller.plist` (`KeepAlive`, a PATH with node and `~/.local/bin`) and loads it beside the worker's agent.
+
+**Health.** `node bin/fm-hooks-worker.js health [--require-poller]` goes beyond `status`: it fails (exit 1, one `fm-hooks health:` line per cause on stderr, full JSON on stdout) when the worker is not beating, no rules are loaded, a rule's action is not on `PATH`, a pending job is older than the drain limit, jobs sit in `failed/`, or (with `--require-poller`) the poller is not polling.
+
+Deploy and undo steps are in `config/README.md`. Limit: a call piped through `| tail` reports the pipe's exit, not the call's.
+
 ## Inbox-connect compatibility
 
 The canonical workflow is maintained outside this repository in the Parlay project: `/Users/trilliumsmith/code/parlay/examples/fleet/skills/inbox-handler/SKILL.md` documents the inbox-handler skill; `/Users/trilliumsmith/code/parlay/examples/fleet/pi-inbox-bridge/src/bridge.ts`, `helpers.ts`, `config.ts`, `listener.ts`, `tailer.ts`, and `worker-prompt.md` implement Pi's `/inbox-connect [store]` command. The skill is installed for Claude Code as `~/.claude/skills/inbox-handler` (a symlink to the Parlay source). It describes enrollment and the serial inbox worker procedure; it does not itself implement `/inbox-connect`.
