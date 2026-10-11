@@ -1,0 +1,11 @@
+#!/bin/sh
+# Gate pushes on the tests and the type check, both run through bun.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+BUN="${BUN:-$(command -v bun || echo "$HOME/.bun/bin/bun")}"
+echo "pre-push: bun test" >&2
+"$BUN" test
+if [ -f tsconfig.json ]; then
+  echo "pre-push: bun tsc --noEmit" >&2
+  "$BUN" tsc --noEmit
+fi

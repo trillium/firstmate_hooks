@@ -65,20 +65,20 @@ install -m 600 "$HERE/fm-hooks.rules.json" "$DEPLOY/fm-hooks.rules.json"
 install -m 600 "$HERE/fm-hooks.rules.json" "$HOME/fm_home/firstmate/fm-hooks.rules.json"
 install -m 700 <this checkout>/bin/fm-hooks-task-card.sh "$DEPLOY/fm-hooks-task-card.sh"
 # the bead action is a symlink: it imports ../src, so it must run from the checkout
-ln -sf <this checkout>/bin/fm-hooks-bead-action.js "$DEPLOY/fm-hooks-bead-action"
-node <this checkout>/bin/fm-hooks-worker.js install --interval 1000 \
+ln -sf <this checkout>/bin/fm-hooks-bead-action.ts "$DEPLOY/fm-hooks-bead-action"
+/Users/trilliumsmith/.bun/bin/bun <this checkout>/bin/fm-hooks-worker.ts install --interval 1000 \
   FM_HOOK_QUEUE=... FM_HOOK_RULES="$DEPLOY/fm-hooks.rules.json"
 ```
 
 Then install the poller and check the whole pipeline:
 
 ```sh
-node <this checkout>/bin/fm-hooks-bead-poller.js install
-node <this checkout>/bin/fm-hooks-worker.js health --require-poller
+/Users/trilliumsmith/.bun/bin/bun <this checkout>/bin/fm-hooks-bead-poller.ts install
+/Users/trilliumsmith/.bun/bin/bun <this checkout>/bin/fm-hooks-worker.ts health --require-poller
 ```
 
-The action runs under `node` (`#!/usr/bin/env node`), so the worker's `PATH` must reach a
-`node`; re-run `fm-hooks-worker.js install` from a shell that has one, and `health` will
+The action runs under `bun` (`#!/usr/bin/env bun`), so the worker's `PATH` must reach a
+`bun`; re-run `fm-hooks-worker.ts install` from a shell that has one, and `health` will
 report `rule action not found on PATH` if any rule's command does not resolve.
 
 Two details matter when the plist is written:
@@ -91,8 +91,8 @@ Two details matter when the plist is written:
 ## Undo
 
 ```sh
-node <this checkout>/bin/fm-hooks-worker.js uninstall
-node <this checkout>/bin/fm-hooks-bead-poller.js uninstall
+/Users/trilliumsmith/.bun/bin/bun <this checkout>/bin/fm-hooks-worker.ts uninstall
+/Users/trilliumsmith/.bun/bin/bun <this checkout>/bin/fm-hooks-bead-poller.ts uninstall
 rm -f "$HOME/.local/state/fm-hooks/fm-hooks.rules.json" \
       "$HOME/.local/state/fm-hooks/fm-hooks-task-card.sh" \
       "$HOME/.local/state/fm-hooks/fm-hooks-bead-action" \

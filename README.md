@@ -4,7 +4,7 @@ External, post-call observation of semantic `fm_*` commands for Claude Code, Ope
 
 ## Requirements
 
-Node.js 20+. No runtime dependencies. Keep this repository and its configuration outside Firstmate itself.
+TypeScript run directly by bun (`/Users/trilliumsmith/.bun/bin/bun`); no build step and no JavaScript, enforced by `.githooks/pre-commit`. Dev dependencies are only `typescript` and `/bun`. Keep this repository and its configuration outside Firstmate itself.
 
 ## Install
 
@@ -43,21 +43,21 @@ An earlier version defaulted to the relative path `.fm-hooks/queue`, so reposito
 
 Rules do not fire because a hook ran; they fire because something drains the queue. Observation and execution are deliberately separate processes — the hook must stay inside the tool's latency budget, and a queued action must not be able to fail a completed Firstmate call — which means **the entire rule-evaluation half of fm-hooks is inert unless a worker is running.** This is not a theoretical risk: the repository shipped a worker that drained the queue once and exited, there was nothing to supervise, nothing supervised it, and no `jobs/`, `done/`, or `failed/` directory was ever created on a live queue. A correct-looking worker and a working observation log are not evidence that rules fire.
 
-`bin/fm-hooks-worker.js` is the operator surface. Use `status` first — it answers the only question that matters, and it answers it as data:
+`bin/fm-hooks-worker.ts` is the operator surface. Use `status` first — it answers the only question that matters, and it answers it as data:
 
-    node bin/fm-hooks-worker.js status            # JSON liveness report; exit 1 when rules are not live
-    node bin/fm-hooks-worker.js status --stale-after 30000
+    /Users/trilliumsmith/.bun/bin/bun bin/fm-hooks-worker.ts status            # JSON liveness report; exit 1 when rules are not live
+    /Users/trilliumsmith/.bun/bin/bun bin/fm-hooks-worker.ts status --stale-after 30000
 
 `status` reports presence and progress separately and only calls a worker **alive** when its pid exists *and* its heartbeat is advancing. That distinction is the whole point: a pid in the process table proves a process started, not that it is working, and a worker whose pid is present but whose beat has stopped is wedged. `ruleEvaluationLive` is the field to act on. A live supervisor over a dead worker reports `false`, because the parent running does not make the child work.
 
 Three processes, three roles:
 
-- **worker** (`src/worker.js --watch`) stays resident and drains the queue every `--interval` ms. It beats to `<queue>/worker/worker.json` on *every* cycle, including idle ones, so an idle-but-healthy worker is distinguishable from a hung one. It also appends `{"type":"worker","phase":"start"|"cycle"|"beat"|"stop",...}` to `events.jsonl`, so a single `tail -f events.jsonl` shows both halves of the pipeline: what was observed, and who is draining it.
-- **supervisor** (`src/worker.js --supervise`) runs the worker as a child and restarts it whenever it exits, with capped exponential backoff. Every restart is counted in `<queue>/worker/supervisor.json`, so a crash-looping worker looks like a crash-looping worker rather than a healthy one with a low job count. The supervisor also re-writes its own beat every 5 seconds while the child is up, so `status` reports a healthy supervisor as alive rather than aging out after its start-time beat.
+- **worker** (`src/worker.ts --watch`) stays resident and drains the queue every `--interval` ms. It beats to `<queue>/worker/worker.json` on *every* cycle, including idle ones, so an idle-but-healthy worker is distinguishable from a hung one. It also appends `{"type":"worker","phase":"start"|"cycle"|"beat"|"stop",...}` to `events.jsonl`, so a single `tail -f events.jsonl` shows both halves of the pipeline: what was observed, and who is draining it.
+- **supervisor** (`src/worker.ts --supervise`) runs the worker as a child and restarts it whenever it exits, with capped exponential backoff. Every restart is counted in `<queue>/worker/supervisor.json`, so a crash-looping worker looks like a crash-looping worker rather than a healthy one with a low job count. The supervisor also re-writes its own beat every 5 seconds while the child is up, so `status` reports a healthy supervisor as alive rather than aging out after its start-time beat.
 - **launchd** (`fm-hooks-worker install`) keeps the supervisor alive across crashes and reboot, under the per-user label `com.fm-hooks.worker`. It writes only `~/Library/LaunchAgents/com.fm-hooks.worker.plist`, carrying only the environment fm-hooks actually resolves against (`FM_HOOK_QUEUE`, `FM_HOOK_*`, `FM_HOME`, `XDG_STATE_HOME`, `HOME`, `PATH`) — never the caller's whole environment. `install` is idempotent, `uninstall` boots out and removes exactly what `install` wrote, and `plist` prints the file without touching launchd.
 
-    node bin/fm-hooks-worker.js install --interval 1000   # launchd supervises the supervisor
-    node bin/fm-hooks-worker.js uninstall
+    /Users/trilliumsmith/.bun/bin/bun bin/fm-hooks-worker.ts install --interval 1000   # launchd supervises the supervisor
+    /Users/trilliumsmith/.bun/bin/bun bin/fm-hooks-worker.ts uninstall
     npm run worker:status
 
 Both processes handle `SIGINT`/`SIGTERM` and leave a final beat, so a stopped worker reads as stopped rather than as a stale gap. `--interval` set on a supervised launch is passed through `FM_HOOK_WORKER_INTERVAL_MS`, the only channel a plist has.
@@ -89,11 +89,11 @@ Add these hooks to the applicable Claude settings file; merge with existing hook
   "hooks": {
     "PostToolUse": [{
       "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_RULES=/absolute/path/fm-hooks.rules.json node /absolute/path/fm-hooks/src/claude-hook.js" }]
+      "hooks": [{ "type": "command", "command": "FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_RULES=/absolute/path/fm-hooks.rules.json /Users/trilliumsmith/.bun/bin/bun /absolute/path/fm-hooks/src/claude-hook.ts" }]
     }],
     "PostToolUseFailure": [{
       "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_RULES=/absolute/path/fm-hooks.rules.json node /absolute/path/fm-hooks/src/claude-hook.js" }]
+      "hooks": [{ "type": "command", "command": "FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_RULES=/absolute/path/fm-hooks.rules.json /Users/trilliumsmith/.bun/bin/bun /absolute/path/fm-hooks/src/claude-hook.ts" }]
     }]
   }
 }
@@ -103,20 +103,20 @@ The adapter observes only Bash and only post-success/post-failure. Claude's Bash
 
 ### OpenCode
 
-Install `src/opencode-plugin.js` as a plugin at the OpenCode-supported project/global plugin location (for example, a project `.opencode/plugins/fm-hooks.js` wrapper exporting this module). Configure `FM_HOOK_QUEUE` and `FM_HOOK_RULES` in the OpenCode process environment. The plugin observes `tool.execute.before` only to retain an in-memory start time, then observes Bash/shell `tool.execute.after`; it does not mutate hook inputs or outputs.
+Install `src/opencode-plugin.ts` as a plugin at the OpenCode-supported project/global plugin location (for example, a project `.opencode/plugins/fm-hooks.ts` wrapper exporting this module). Configure `FM_HOOK_QUEUE` and `FM_HOOK_RULES` in the OpenCode process environment. The plugin observes `tool.execute.before` only to retain an in-memory start time, then observes Bash/shell `tool.execute.after`; it does not mutate hook inputs or outputs.
 
 The installed compatibility evidence was OpenCode CLI 1.18.30 with `@opencode-ai/plugin` types 1.15.3. Verify the API against your actual versions. Types do not guarantee an exit-code field or an explicit failure callback. The adapter accepts explicit `metadata.exitCode`, `metadata.exit_code`, `metadata.code`, corresponding top-level codes, or explicit `success` booleans. It never infers success from empty output: absent a recognized signal, outcome is `unknown`, and success-only rules do not fire. Project directory/worktree is a baseline cwd, not proof of the spawned shell's cwd. Runtime plugin context and metadata are version-sensitive.
 
 ### Pi
 
-`src/pi-extension.js` observes the declared `tool_execution_start` and `tool_execution_end` lifecycle events. It retains only a recognized Bash command and start metadata by Pi call ID, then normalizes it through the same observer after the matching completion. It never subscribes to input/result-transforming hooks, changes tool data, or stores the arbitrary result payload. Pi's completion event provides an `isError` flag but no stable exit-code contract: `true` maps to failure, `false` to success, and missing or non-boolean values to unknown. Calls without a matching start are ignored. Observer errors are caught so they cannot affect the completed tool call.
+`src/pi-extension.ts` observes the declared `tool_execution_start` and `tool_execution_end` lifecycle events. It retains only a recognized Bash command and start metadata by Pi call ID, then normalizes it through the same observer after the matching completion. It never subscribes to input/result-transforming hooks, changes tool data, or stores the arbitrary result payload. Pi's completion event provides an `isError` flag but no stable exit-code contract: `true` maps to failure, `false` to success, and missing or non-boolean values to unknown. Calls without a matching start are ignored. Observer errors are caught so they cannot affect the completed tool call.
 
 Load it for one Pi process, with a fresh disposable queue and the fixture-only rules:
 
 ```sh
 FM_HOOK_QUEUE="$(mktemp -d "${TMPDIR:-/tmp}/fm-hooks-pi-demo.XXXXXX")" \
 FM_HOOK_RULES="$PWD/test/fixtures/pi-demo-rules.json" \
-pi --extension "$PWD/src/pi-extension.js"
+pi --extension "$PWD/src/pi-extension.ts"
 ```
 
 This does not register a global extension or start a worker. The rules enqueue only `printf` fixture actions, and no worker is started. The test suite demonstrates the adapter by supplying harmless `fm_dispatch` / `fm_scout` fixture event data directly; those command strings are never executed.
@@ -157,21 +157,19 @@ The `fleet` store holds one bead per Firstmate task, id `fleet-<task>`, carrying
 
 **Status tail.** The poller also tails `$FM_HOME/state/*.status` every cycle (`FM_HOOK_STATUS_TAIL=0` turns it off; `fm-hooks-bead-poller status-tail --once` runs one pass). A `working|needs-decision|blocked|paused|done|failed [at=<epoch>]: text` line becomes a comment on `fleet-<task>` and moves `fm-state:`; `resolved` lines comment without changing the state; anything else is skipped. The first pass never backfills: it records where each file ends and reads nothing. A file that appears later is read from its start, a truncated or replaced file restarts at zero, a partial last line waits for its newline, and a store failure holds the cursor at the failed line. Cursor: `<queue>/status-tail/cursor.json`. Comment ids hash (task, byte offset, line), so a replay writes nothing. `needs-decision` and `blocked` do not open `review` beads; only `fm-captain-hold.sh hold` does.
 
-**Retiring old duplicates.** Before resolution existed, calls could mint a `project-fmh-<name>` bead next to a curated one. `node bin/fm-hooks-project-merge.js` is a one-time clean-up: it prints, for each such bead that now resolves to a real project bead, the comments it would move and the close it would make. Nothing is written unless `--apply` is passed; with it, comments the real bead lacks (matched by `[cid:...]` marker, else exact text) are copied across and the duplicate is closed with a pointer to the real bead. A minted bead with no real counterpart is left alone, and a repeat run writes nothing.
+**Retiring old duplicates.** Before resolution existed, calls could mint a `project-fmh-<name>` bead next to a curated one. `/Users/trilliumsmith/.bun/bin/bun bin/fm-hooks-project-merge.ts` is a one-time clean-up: it prints, for each such bead that now resolves to a real project bead, the comments it would move and the close it would make. Nothing is written unless `--apply` is passed; with it, comments the real bead lacks (matched by `[cid:...]` marker, else exact text) are copied across and the duplicate is closed with a pointer to the real bead. A minted bead with no real counterpart is left alone, and a repeat run writes nothing.
 
 **Idempotence.** Queue delivery is at-least-once, and a re-observed call re-runs its job once the first has moved to `done/`. So idempotence lives in the store, never in local state: created beads have ids derived from the correlation id, and every comment carries a `[cid:<correlation prefix>]` marker that is checked before writing. A re-delivery performs no write. A store failure exits non-zero, so the job lands in `failed/` instead of vanishing.
 
-**Poller (bead -> fm).** `bin/fm-hooks-bead-poller.js` finds `review` beads (and `human`-labelled beads in the other stores in `FM_HOOK_POLL_STORES`, default `review,task`) closed since its cursor and relays each once: a hold bead via `fm-send.sh <task> --resolve-key <key> <answer>`, any other via `fm-inbox.sh note --request-id <id>`. `brain human respond` adds a comment and closes, so a response is a closure. The first run starts at "now" and never backfills (`--since ISO` overrides it once). Cursor and relayed set live in `<queue>/poller/cursor.json`; the cursor never advances past a bead whose relay failed, a bead is marked relayed only after its relay succeeded, and a repeated note is a no-op through `--request-id`. A failed `--resolve-key` send falls back to a note so the answer still arrives. Relays go through `$FM_HOME/bin/fm-send.sh` and `fm-inbox.sh` (`FM_HOME` defaults to `~/fm_home/firstmate`; `FM_HOOK_FM_BIN_DIR` overrides the directory).
+**Poller (bead -> fm).** `bin/fm-hooks-bead-poller.ts` finds `review` beads (and `human`-labelled beads in the other stores in `FM_HOOK_POLL_STORES`, default `review,task`) closed since its cursor and relays each once: a hold bead via `fm-send.sh <task> --resolve-key <key> <answer>`, any other via `fm-inbox.sh note --request-id <id>`. `brain human respond` adds a comment and closes, so a response is a closure. The first run starts at "now" and never backfills (`--since ISO` overrides it once). Cursor and relayed set live in `<queue>/poller/cursor.json`; the cursor never advances past a bead whose relay failed, a bead is marked relayed only after its relay succeeded, and a repeated note is a no-op through `--request-id`. A failed `--resolve-key` send falls back to a note so the answer still arrives. Relays go through `$FM_HOME/bin/fm-send.sh` and `fm-inbox.sh` (`FM_HOME` defaults to `~/fm_home/firstmate`; `FM_HOOK_FM_BIN_DIR` overrides the directory).
 
 ```sh
-node bin/fm-hooks-bead-poller.js once|watch|status|plist|install|uninstall [--queue DIR] [--interval MS] [--since ISO]
+/Users/trilliumsmith/.bun/bin/bun bin/fm-hooks-bead-poller.ts once|watch|status|plist|install|uninstall [--queue DIR] [--interval MS] [--since ISO]
 ```
 
-`install` writes `~/Library/LaunchAgents/com.fm-hooks.bead-poller.plist` (`KeepAlive`, a PATH with node and `~/.local/bin`) and loads it beside the worker's agent.
+`install` writes `~/Library/LaunchAgents/com.fm-hooks.bead-poller.plist` (`KeepAlive`, a PATH with bun and `~/.local/bin`) and loads it beside the worker's agent.
 
-**Inbox (captain on another channel).** Each poll also runs `inbox list --json` (the store wrapper, never bare `bd`) and relays every open inbox bead id not yet seen as `fm-inbox.sh note --request-id inbox-<id>` carrying the id, title and a clipped body. Seen ids persist in `<queue>/poller/inbox-seen.json`; the first pass only records the existing backlog, and an id is recorded only after its relay succeeded. `FM_HOOK_POLL_INBOX=0` disables it.
-
-**Health.** `node bin/fm-hooks-worker.js health [--require-poller]` goes beyond `status`: it fails (exit 1, one `fm-hooks health:` line per cause on stderr, full JSON on stdout) when the worker is not beating, no rules are loaded, a rule's action is not on `PATH`, a pending job is older than the drain limit, jobs sit in `failed/`, or (with `--require-poller`) the poller is not polling.
+**Health.** `/Users/trilliumsmith/.bun/bin/bun bin/fm-hooks-worker.ts health [--require-poller]` goes beyond `status`: it fails (exit 1, one `fm-hooks health:` line per cause on stderr, full JSON on stdout) when the worker is not beating, no rules are loaded, a rule's action is not on `PATH`, a pending job is older than the drain limit, jobs sit in `failed/`, or (with `--require-poller`) the poller is not polling.
 
 **Live deployment record (2026-10-11).** Shared clone at `dd6a8da`, `com.fm-hooks.worker` and `com.fm-hooks.bead-poller` loaded. `health --require-poller`, run with the worker's `PATH`, exited 0: `healthy: true`, worker alive, 13 rules live, 0 pending / 0 failed jobs, poller alive. A real `fm-captain-hold.sh --help` call produced a timeline comment on `lifespan-fmh20261011`; a closed `human` review test bead was relayed once through `fm-inbox.sh note`. `health` resolves actions on the *caller's* `PATH`, so run it with the plist's `PATH` (deploy dir first), not a bare shell's.
 
@@ -211,3 +209,9 @@ Tests use harmless command strings and temporary directories only; they never in
 - Start times are process-local to OpenCode and unavailable after plugin restart; call ID and raw command remain the deduplication basis.
 - This covers harness-observed tool calls, not arbitrary scripts, interactive shell commands, or every possible fm_* invocation.
 - Queue delivery is durable and enqueue is idempotent; external action execution is at-least-once across a crash window, so configured actions must honor the supplied idempotency key.
+
+## Development
+
+Everything is TypeScript run by bun: `bun test`, `bun run typecheck` (`bunx tsc --noEmit`), and `bun run <script>` from `package.json`. Entry points carry `#!/usr/bin/env bun`. The launchd plists run `/Users/trilliumsmith/.bun/bin/bun <entry>.ts`.
+
+`bun install` runs `scripts/install-githooks.ts`, which sets `core.hooksPath=.githooks`: `pre-commit` rejects staging any added or modified `.js`/`.mjs`/`.cjs`/`.jsx` file, and `pre-push` runs `bun test` and `bun tsc --noEmit`. To reuse it in another project, copy `scripts/install-githooks.ts` and `.githooks/` there, or run `bun scripts/install-githooks.ts /path/to/repo` (it copies the hooks into a repo that has none).

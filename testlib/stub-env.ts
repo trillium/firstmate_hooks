@@ -8,7 +8,7 @@ const STUB = fileURLToPath(new URL('./store-stub.ts', import.meta.url));
 // Builds a sandbox of fake store wrappers (projects, review, lifespan, task) plus fake
 // fm-inbox.sh / fm-send.sh, all recording to one calls file, and an env that points the
 // code under test at them.
-export async function withStubs(fn, { stores = ['projects', 'review', 'lifespan', 'task', 'fleet', 'inbox'] } = {}) {
+export async function withStubs(fn, { stores = ['projects', 'review', 'lifespan', 'task', 'fleet'] } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'fm-hooks-bead-'));
   const env: Record<string, any> = { ...process.env, STUB_DB: join(dir, 'db.json'), STUB_CALLS: join(dir, 'calls.jsonl'),
     FM_HOOK_QUEUE: join(dir, 'queue'), FM_HOME: join(dir, 'fmhome'), FM_HOOK_FM_BIN_DIR: join(dir, 'fmbin') };

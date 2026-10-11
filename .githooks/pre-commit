@@ -1,0 +1,9 @@
+#!/bin/sh
+# No JavaScript: reject any added, copied, renamed or modified .js/.mjs/.cjs/.jsx file.
+# Deletions are allowed, so a JS file can still be removed. Write TypeScript and run it with bun.
+bad=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(js|mjs|cjs|jsx)$')
+if [ -n "$bad" ]; then
+  echo "pre-commit: JavaScript is not allowed in this repo; use .ts (run with bun). Offending files:" >&2
+  echo "$bad" | sed 's/^/  /' >&2
+  exit 1
+fi
