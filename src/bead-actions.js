@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import { queueRoot } from './paths.js';
 import { fleetAction } from './fleet-beads.js';
 import { MINTED_PREFIX, resolveProjectBead } from './project-beads.js';
+import { scoutReport } from './scout-capture.ts';
 
 // Rule actions that write the outcome of a Firstmate call into beads.
 //
@@ -17,7 +18,7 @@ import { MINTED_PREFIX, resolveProjectBead } from './project-beads.js';
 // Stores are reached only through their wrapper CLIs (`projects`, `review`, `lifespan`),
 // never bare `bd`, as an argv with no shell. FM_HOOK_<STORE>_BIN overrides a wrapper.
 
-export const KINDS = ['ledger', 'project-comment', 'captain-hold', 'fleet'];
+export const KINDS = ['ledger', 'project-comment', 'captain-hold', 'fleet', 'scout-report'];
 
 const hex = (value, length) => createHash('sha256').update(value).digest('hex').slice(0, length);
 export const clip = (value, max) => (String(value).length > max ? `${String(value).slice(0, max - 1)}…` : String(value));
@@ -230,6 +231,7 @@ export async function runBeadAction({ kind, operation, correlationId, env = proc
   const event = await loadEvent(operation, correlationId, root);
   if (kind === 'ledger') return ledger(run, event);
   if (kind === 'fleet') return fleetAction(run, event, env);
+  if (kind === 'scout-report') return scoutReport({ run, event, env, helpers: { exists, createOnce } });
   const call = await describeCall(event, env);
   return kind === 'captain-hold' ? captainHold(run, event, call) : projectComment(run, event, call, env);
 }

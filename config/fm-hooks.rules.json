@@ -103,6 +103,12 @@
       "action": { "command": "fm-hooks-bead-action", "args": ["project-comment", "{operation}", "{correlationId}", "{ruleId}"] }
     },
     {
+      "id": "fm-scout-report-capture",
+      "operation": "fm-fleet-ledger.sh",
+      "outcomes": ["success"],
+      "action": { "command": "fm-hooks-bead-action", "args": ["scout-report", "{operation}", "{correlationId}", "{ruleId}"] }
+    },
+    {
       "id": "fm-captain-hold-review",
       "operation": "fm-captain-hold.sh",
       "outcomes": ["success"],
