@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { queueRoot } from './paths.js';
+import { MINTED_PREFIX, resolveProjectBead } from './project-beads.js';
 
 // Rule actions that write the outcome of a Firstmate call into beads.
 //
@@ -141,13 +142,12 @@ export async function describeCall(event, env = process.env) {
   return null;
 }
 
-function ensureProjectBead(run, name, correlationId) {
-  const listed = JSON.parse(run('projects', ['list', '--all', '-l', `project:${name}`, '--json', '-n', '50']) || '[]');
-  const pick = listed.find(bead => bead.title === name) ?? listed[0];
-  if (pick) return pick.id;
-  // No curated bead names this project yet: mint one deterministically so the next
-  // call (and a re-delivery of this one) finds it instead of making a second.
-  const id = `project-fmh-${slug(name)}`;
+async function ensureProjectBead(run, name, correlationId, env) {
+  const found = await resolveProjectBead(run, name, { env });
+  if (found) return found;
+  // No bead names this project yet: mint one deterministically so the next call (and a
+  // re-delivery of this one) finds it instead of making a second.
+  const id = `${MINTED_PREFIX}${slug(name)}`;
   createOnce(run, 'projects', id, { title: name, type: 'task', priority: 3,
     labels: ['fm-hooks', `project:${name}`],
     body: `Project bead minted by fm-hooks so Firstmate calls on "${name}" have a timeline. Triggering call ${marker(correlationId)}.` });
@@ -170,10 +170,10 @@ function ledger(run, event) {
   return { target: id, wrote: commentOnce(run, 'lifespan', id, event.correlationId, line) };
 }
 
-function projectComment(run, event, call) {
+async function projectComment(run, event, call, env) {
   if (!call) return { skipped: 'not a state-changing call' };
   if (!call.project) return { skipped: `no project resolvable for ${call.task ?? 'call'}` };
-  const id = ensureProjectBead(run, call.project, event.correlationId);
+  const id = await ensureProjectBead(run, call.project, event.correlationId, env);
   const text = `fm-hooks: ${call.line} (${event.harness ?? '?'}, ${String(event.finishedAt ?? '').slice(0, 19)}Z)`;
   const result = { target: id, wrote: commentOnce(run, 'projects', id, event.correlationId, text) };
   if (call.verb === 'outcome' && call.verdict === 'captain') {
@@ -204,5 +204,5 @@ export async function runBeadAction({ kind, operation, correlationId, env = proc
   const event = await loadEvent(operation, correlationId, root);
   if (kind === 'ledger') return ledger(run, event);
   const call = await describeCall(event, env);
-  return kind === 'captain-hold' ? captainHold(run, event, call) : projectComment(run, event, call);
+  return kind === 'captain-hold' ? captainHold(run, event, call) : projectComment(run, event, call, env);
 }
