@@ -137,3 +137,31 @@ test('a bead fm-hooks closed itself after a hold answer is neither relayed nor f
   assert.deepEqual(result.failed, []);
   assert.deepEqual(sent.map(s => s.key), ['k2']);
 }));
+
+test('a new inbox bead is relayed once with its id and title; the backlog is not', async () => withStubs(async ({ env }) => {
+  const { sent, relay } = recorder();
+  await seed(env, 'inbox', { id: 'inbox-old', title: 'already here' });
+  const first = await pollOnce({ root: root(env), env, relay, now: T0 });
+  assert.equal(first.relayed.length, 0);
+  await seed(env, 'inbox', { id: 'inbox-new', title: 'Check the deploy', description: 'before noon' });
+  const second = await pollOnce({ root: root(env), env, relay, now: T0 + 30000 });
+  const third = await pollOnce({ root: root(env), env, relay, now: T0 + 60000 });
+  assert.equal(second.relayed.length, 1);
+  assert.equal(third.relayed.length, 0);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /inbox-new \(Check the deploy\): before noon/);
+  assert.equal(sent[0].requestId, 'inbox-inbox-new');
+  const calls = (await readFile(env.STUB_CALLS, 'utf8')).trim().split('\n').map(l => JSON.parse(l));
+  assert.ok(calls.some(c => c.store === 'inbox' && c.argv.includes('list') && c.argv.includes('--json')));
+}));
+
+test('a failed inbox relay is retried and the seen set survives a restart', async () => withStubs(async ({ env }) => {
+  await pollOnce({ root: root(env), env, relay: recorder().relay, now: T0 });
+  await seed(env, 'inbox', { id: 'inbox-x', title: 'ping' });
+  const failed = await pollOnce({ root: root(env), env, relay: async () => { throw new Error('fm down'); }, now: T0 + 30000 });
+  assert.equal(failed.failed.filter(f => f.store === 'inbox').length, 1);
+  const { sent, relay } = recorder();
+  const retry = await pollOnce({ root: root(env), env, relay, now: T0 + 60000 });
+  assert.equal(retry.relayed.length, 1);
+  assert.equal(sent.length, 1);
+}));

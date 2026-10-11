@@ -98,7 +98,7 @@ export function describeClosure(store, bead, comments) {
     text: `${head} (${clip(bead.title ?? '', 120)}): ${answer ? clip(answer, 1500) : 'closed without a comment'}` };
 }
 
-export async function pollOnce({ root = queueRoot(), env = process.env, stores = watchedStores(env), cli = storeCli(env),
+async function pollClosures({ root = queueRoot(), env = process.env, stores = watchedStores(env), cli = storeCli(env),
   relay = firstmateRelay(env), now = Date.now(), since } = {}) {
   const startedAt = new Date(now).toISOString();
   let cursor = await readCursor(root);
@@ -145,6 +145,53 @@ export async function pollOnce({ root = queueRoot(), env = process.env, stores =
   for (const [key, at] of Object.entries(cursor.relayed)) if (now - Date.parse(at) > KEEP_RELAYED_MS) delete cursor.relayed[key];
   await writeJson(cursorPath(root), cursor);
   return { initialized: false, since: cursor.since, relayed, failed };
+}
+
+// Every inbox bead is the captain writing on another channel. Unlike closures this
+// pass has no cursor: it lists the open inbox (`inbox list`, the store wrapper) and
+// relays each id not yet in <queue>/poller/inbox-seen.json. The first pass only records
+// what is already there, so the backlog does not wake Firstmate. An id is recorded only
+// after its relay succeeded; the note's --request-id makes a crash-repeat a no-op.
+const inboxSeenPath = root => join(pollerDir(root), 'inbox-seen.json');
+
+export function describeInbox(bead) {
+  const body = String(bead.description ?? '').trim();
+  return { task: null, key: null, requestId: `inbox-${bead.id}`.replace(/[^A-Za-z0-9_.-]/g, '_'),
+    text: `Captain wrote to the inbox: ${bead.id} (${clip(bead.title ?? '', 120)})${body ? `: ${clip(body, 600)}` : ''}` };
+}
+
+export async function pollInbox({ root, cli, relay, now = Date.now() }) {
+  let seen;
+  try { seen = JSON.parse(await readFile(inboxSeenPath(root), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let beads;
+  try { beads = JSON.parse((await cli('inbox', ['list', '--json', '-n', '0'])) || '[]'); }
+  catch (error) { return { relayed: [], failed: [{ store: 'inbox', error: `list: ${clip(error.stderr || error.message, 200)}` }] }; }
+  const stamp = new Date(now).toISOString();
+  if (!seen) {
+    await writeJson(inboxSeenPath(root), { ids: Object.fromEntries(beads.map(b => [b.id, stamp])) });
+    return { relayed: [], failed: [], initialized: true };
+  }
+  const relayed = [], failed = [];
+  for (const bead of beads) {
+    if (!bead.id || seen.ids[bead.id]) continue;
+    try {
+      const closure = describeInbox(bead);
+      const result = await relay(closure);
+      seen.ids[bead.id] = stamp;
+      await writeJson(inboxSeenPath(root), seen);
+      relayed.push({ store: 'inbox', id: bead.id, via: result.via, requestId: closure.requestId });
+    } catch (error) { failed.push({ store: 'inbox', id: bead.id, error: clip(error.stderr || error.message, 200) }); }
+  }
+  return { relayed, failed };
+}
+
+export async function pollOnce({ root = queueRoot(), env = process.env, cli = storeCli(env), relay = firstmateRelay(env),
+  now = Date.now(), inbox = env.FM_HOOK_POLL_INBOX !== '0', ...options } = {}) {
+  const result = await pollClosures({ root, env, cli, relay, now, ...options });
+  if (!inbox) return result;
+  const found = await pollInbox({ root, cli, relay, now });
+  return { ...result, relayed: [...result.relayed, ...found.relayed], failed: [...result.failed, ...found.failed] };
 }
 
 const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms); });

@@ -168,6 +168,8 @@ node bin/fm-hooks-bead-poller.js once|watch|status|plist|install|uninstall [--qu
 
 `install` writes `~/Library/LaunchAgents/com.fm-hooks.bead-poller.plist` (`KeepAlive`, a PATH with node and `~/.local/bin`) and loads it beside the worker's agent.
 
+**Inbox (captain on another channel).** Each poll also runs `inbox list --json` (the store wrapper, never bare `bd`) and relays every open inbox bead id not yet seen as `fm-inbox.sh note --request-id inbox-<id>` carrying the id, title and a clipped body. Seen ids persist in `<queue>/poller/inbox-seen.json`; the first pass only records the existing backlog, and an id is recorded only after its relay succeeded. `FM_HOOK_POLL_INBOX=0` disables it.
+
 **Health.** `node bin/fm-hooks-worker.js health [--require-poller]` goes beyond `status`: it fails (exit 1, one `fm-hooks health:` line per cause on stderr, full JSON on stdout) when the worker is not beating, no rules are loaded, a rule's action is not on `PATH`, a pending job is older than the drain limit, jobs sit in `failed/`, or (with `--require-poller`) the poller is not polling.
 
 **Live deployment record (2026-10-11).** Shared clone at `dd6a8da`, `com.fm-hooks.worker` and `com.fm-hooks.bead-poller` loaded. `health --require-poller`, run with the worker's `PATH`, exited 0: `healthy: true`, worker alive, 13 rules live, 0 pending / 0 failed jobs, poller alive. A real `fm-captain-hold.sh --help` call produced a timeline comment on `lifespan-fmh20261011`; a closed `human` review test bead was relayed once through `fm-inbox.sh note`. `health` resolves actions on the *caller's* `PATH`, so run it with the plist's `PATH` (deploy dir first), not a bare shell's.
