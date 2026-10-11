@@ -140,3 +140,16 @@ test('a store failure propagates so the job lands in failed/ instead of vanishin
   assert.match(errors[0], /fm-hooks-bead-action/);
   assert.equal(await actionCli(['bogus'], { env, log() {}, error() {} }), 2);
 }));
+
+test('the store runner survives output larger than the default 1MB buffer', async () => {
+  const { mkdtemp, writeFile, chmod } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { storeRunner } = await import('../src/bead-actions.js');
+  const dir = await mkdtemp(join(tmpdir(), 'big-store-'));
+  const bin = join(dir, 'big');
+  await writeFile(bin, '#!/bin/sh\nhead -c 3000000 /dev/zero | tr "\\0" x\n');
+  await chmod(bin, 0o755);
+  const out = storeRunner({ ...process.env, FM_HOOK_BIG_BIN: bin })('big', []);
+  assert.equal(out.length, 3000000);
+});

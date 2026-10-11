@@ -33,9 +33,10 @@ if (verb === 'show') {
   console.log(JSON.stringify(beads[argv[1]]?.comments ?? []));
 } else if (verb === 'list') {
   const labels = take('-l', '--label');
+  const any = take('--label-any').flatMap(v => v.split(','));
   const status = take('--status', '-s')[0];
   const after = take('--closed-after')[0];
-  const rows = Object.values(beads).filter(b => labels.every(l => b.labels.includes(l))
+  const rows = Object.values(beads).filter(b => labels.every(l => b.labels.includes(l)) && (!any.length || any.some(l => b.labels.includes(l)))
     && (!status || b.status === status) && (!after || (b.closed_at && b.closed_at > after)));
   console.log(JSON.stringify(rows.map(({ comments, ...rest }) => ({ ...rest, comment_count: comments.length }))));
 } else if (verb === 'close') {

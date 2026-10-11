@@ -107,3 +107,9 @@ test('migration rejects unknown flags', async () => withStubs(async ({ env }) =>
   assert.equal(await mergeCli(['--wat'], { env, log() {}, error: line => errors.push(line) }), 2);
   assert.match(errors[0], /usage/);
 }));
+
+test('the project sweep asks the store for all candidate labels in one --label-any call', async () => withStubs(async ({ env }) => {
+  await seed(env, [bead('project-a', 'Alpha', ['project:Alpha']), bead('project-b', 'Beta', ['project:Beta'])]);
+  const event = await recordEvent(env, { args: ['task-a', '/home/x/projects/Alpha'] });
+  assert.equal((await act(event, env)).target, 'project-a');
+}));

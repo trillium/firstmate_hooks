@@ -74,9 +74,7 @@ export async function resolveProjectBead(run, name, { env = process.env, exclude
   }
   const found = new Map();
   const wanted = new Set(names.flatMap(n => [`project:${n}`, `project:${lower(n)}`]));
-  for (const label of wanted) {
-    for (const bead of listJson(run, ['-l', label, '-n', '50'])) found.set(bead.id, bead);
-  }
+  for (const bead of listJson(run, ['--label-any', [...wanted].join(','), '-n', '0'])) found.set(bead.id, bead);
   // The store matches labels exactly; sweep the rest for a label differing only in case.
   const labelled = bead => (bead.labels ?? []).some(l => names.some(n => lower(l) === `project:${lower(n)}`));
   const all = listJson(run, ['-n', '0']);

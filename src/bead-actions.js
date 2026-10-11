@@ -26,7 +26,7 @@ const marker = correlationId => `[cid:${correlationId.slice(0, 16)}]`;
 export function storeRunner(env = process.env) {
   return (store, args) => {
     const bin = env[`FM_HOOK_${store.toUpperCase()}_BIN`] || store;
-    return execFileSync(bin, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+    return execFileSync(bin, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
   };
 }
 
