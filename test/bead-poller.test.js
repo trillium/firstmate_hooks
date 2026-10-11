@@ -25,6 +25,15 @@ test('first poll initializes the cursor and relays nothing, even with old closur
   assert.equal((await readCursor(root(env))).since, '2026-10-10T12:00:00.000Z');
 }));
 
+test('a bead closed minutes before the poller first started is not backfilled', async () => withStubs(async ({ env }) => {
+  const { sent, relay } = recorder();
+  await seed(env, 'review', { id: 'review-recent', title: 'recent', status: 'closed', closed_at: '2026-10-10T11:58:00Z' });
+  await pollOnce({ root: root(env), env, relay, now: T0 });
+  const second = await pollOnce({ root: root(env), env, relay, now: T0 + 30000 });
+  assert.equal(second.relayed.length, 0);
+  assert.deepEqual(sent, []);
+}));
+
 test('a closed review bead is relayed once as a note, however many polls see it', async () => withStubs(async ({ env }) => {
   const { sent, relay } = recorder();
   await pollOnce({ root: root(env), env, relay, now: T0 });

@@ -103,11 +103,13 @@ export async function pollOnce({ root = queueRoot(), env = process.env, stores =
   if (!cursor) {
     // First run: never backfill history. Every old closed review bead would otherwise
     // wake Firstmate at once.
-    cursor = { since: since ?? startedAt, relayed: {} };
+    cursor = { since: since ?? startedAt, relayed: {}, ...(since ? {} : { initial: true }) };
     await writeJson(cursorPath(root), cursor);
     if (!since) return { initialized: true, since: cursor.since, relayed: [], failed: [] };
   }
-  const floor = new Date(Date.parse(cursor.since) - MARGIN_MS).toISOString();
+  // The first poll after initialization looks back no further than the initialization
+  // itself; the margin would otherwise backfill closures from just before it started.
+  const floor = new Date(Date.parse(cursor.since) - (cursor.initial ? 0 : MARGIN_MS)).toISOString();
   const relayed = [], failed = [];
   for (const store of stores) {
     const args = ['list', '--all', '--status', 'closed', '--closed-after', floor, '--json', '-n', '0'];
@@ -133,6 +135,7 @@ export async function pollOnce({ root = queueRoot(), env = process.env, stores =
     }
   }
   const oldestFailure = failed.map(f => Date.parse(f.closedAt)).filter(Number.isFinite).sort((a, b) => a - b)[0];
+  delete cursor.initial;
   cursor.since = oldestFailure !== undefined ? new Date(Math.min(oldestFailure, now)).toISOString() : startedAt;
   for (const [key, at] of Object.entries(cursor.relayed)) if (now - Date.parse(at) > KEEP_RELAYED_MS) delete cursor.relayed[key];
   await writeJson(cursorPath(root), cursor);
