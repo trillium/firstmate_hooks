@@ -2,9 +2,9 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runBeadAction } from '../src/bead-actions.js';
+import { runBeadAction } from '../src/bead-actions.ts';
 import { captainCalls, scoutDone } from '../src/scout-capture.ts';
-import { withStubs } from '../testlib/stub-env.js';
+import { withStubs } from '../testlib/stub-env.ts';
 
 const STORES = ['projects', 'review', 'lifespan', 'task', 'brain', 'fleet'];
 const REPORT = `# Demo scout (task-d1)
@@ -69,7 +69,7 @@ test('scout done creates one brain bead, links fleet and backlog beads, files ca
   assert.ok(created.labels.includes('fm-task:demo-scout'));
   assert.equal(state.fleet.beads['fleet-demo-scout'].comments.length, 1);
   assert.equal(state.task.beads['task-d1'].comments.length, 1);
-  const reviews = Object.values(state.review.beads);
+  const reviews = Object.values(state.review.beads) as any[];
   assert.equal(reviews.length, 3);
   assert.ok(reviews.every(r => r.labels.includes('human') && r.labels.includes('fm-task:demo-scout')));
 

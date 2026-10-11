@@ -4,15 +4,20 @@
   "private": true,
   "description": "External, post-call semantic fm_* event hooks for Claude Code and OpenCode",
   "type": "module",
-  "engines": { "node": ">=20" },
   "scripts": {
-    "test": "node --test",
-    "hook:claude": "node src/claude-hook.js",
-    "worker": "node src/worker.js",
-    "worker:watch": "node src/worker.js --watch",
-    "worker:supervise": "node src/worker.js --supervise",
-    "worker:status": "node bin/fm-hooks-worker.js status",
-    "worker:health": "node bin/fm-hooks-worker.js health",
-    "poller": "node bin/fm-hooks-bead-poller.js watch"
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "prepare": "bun scripts/install-githooks.ts",
+    "hook:claude": "bun src/claude-hook.ts",
+    "worker": "bun src/worker.ts",
+    "worker:watch": "bun src/worker.ts --watch",
+    "worker:supervise": "bun src/worker.ts --supervise",
+    "worker:status": "bun bin/fm-hooks-worker.ts status",
+    "worker:health": "bun bin/fm-hooks-worker.ts health",
+    "poller": "bun bin/fm-hooks-bead-poller.ts watch"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^5"
   }
 }

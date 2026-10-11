@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { createOnce, exists } from './bead-actions.js';
-import { FLEET_STORE, fleetId } from './fleet-beads.js';
+import { createOnce, exists } from './bead-actions.ts';
+import { FLEET_STORE, fleetId } from './fleet-beads.ts';
 
 // A scout's findings live only in data/<task>/report.md. When the scout appends its
 // `done` status line, the worker's status command is followed by
@@ -11,7 +11,7 @@ import { FLEET_STORE, fleetId } from './fleet-beads.js';
 // carries the status line and the status path. The report's existence is what separates a
 // scout from a ship task, whose `done` line is not captured.
 //
-// Writes, each safe to repeat (store state is the only memory, see bead-actions.js):
+// Writes, each safe to repeat (store state is the only memory, see bead-actions.ts):
 //   - one `brain` bead with a deterministic id per task: summary, report path, task id;
 //   - a cross-reference comment, once, on `fleet-<task>` and on the backlog task bead;
 //   - one `review` bead per captain call the report lists.
