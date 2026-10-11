@@ -14,6 +14,8 @@ export const WORKER_ENTRY = fileURLToPath(new URL('./worker.js', import.meta.url
 
 export const DEFAULT_BACKOFF_MS = 1000;
 export const DEFAULT_MAX_BACKOFF_MS = 30000;
+// Must stay well under DEFAULT_STALE_MS (15000) or status reports a healthy supervisor stale.
+export const DEFAULT_BEAT_MS = 5000;
 
 const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms); });
 
@@ -33,6 +35,7 @@ export async function supervise({
   spawnChild = spawnWorker,
   backoffMs = DEFAULT_BACKOFF_MS,
   maxBackoffMs = DEFAULT_MAX_BACKOFF_MS,
+  beatMs = DEFAULT_BEAT_MS,
   maxRestarts = Infinity,
   onEvent = () => {},
 } = {}) {
@@ -66,7 +69,15 @@ export async function supervise({
       onEvent({ phase: 'spawn', pid: child.pid ?? null, restarts: state.restarts });
       await writeHeartbeat(root, { ...state }, 'supervisor').catch(() => {});
 
-      const exit = await waitForExit(child);
+      // The supervisor spends nearly all its life parked on the child, so without its own
+      // timer its beat would be written once at spawn and then age into "stale" while the
+      // worker beats fine. The timer is what makes supervisor liveness truthful.
+      const beater = beatMs > 0
+        ? setInterval(() => { writeHeartbeat(root, { ...state }, 'supervisor').catch(() => {}); }, beatMs)
+        : null;
+      let exit;
+      try { exit = await waitForExit(child); }
+      finally { if (beater) clearInterval(beater); }
       state.lastExit = { ...exit, at: new Date().toISOString() };
       onEvent({ phase: 'exit', ...state.lastExit, restarts: state.restarts });
       if (controller.signal.aborted) break;

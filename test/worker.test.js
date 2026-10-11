@@ -302,3 +302,23 @@ test('a rules file without a rules array is rejected rather than silently ignore
     assert.deepEqual(await loadRules([join(root, 'absent.json')]), []);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('supervisor keeps beating on its own while the child stays up', async () => {
+  const child = new EventEmitter();
+  child.pid = 41000; child.exitCode = null; child.signalCode = null;
+  child.kill = () => { child.exitCode = 0; setImmediate(() => child.emit('exit', 0, null)); };
+  const queue = await mkdtemp(join(tmpdir(), 'fm-hooks-supervise-beat-'));
+  try {
+    const run = supervise({ root: queue, spawnChild: () => child, beatMs: 20 });
+    await new Promise(resolve => { setTimeout(resolve, 60); });
+    const first = (await readHeartbeat(queue, 'supervisor')).updatedAt;
+    await new Promise(resolve => { setTimeout(resolve, 100); });
+    const later = (await readHeartbeat(queue, 'supervisor')).updatedAt;
+    assert.ok(Date.parse(later) > Date.parse(first), 'a supervisor parked on a healthy child must still advance its beat');
+    const status = await workerStatus({ root: queue, staleAfterMs: 1000 });
+    assert.equal(status.supervisor.heartbeatFresh, true);
+    child.exitCode = 0; child.emit('exit', 0, null);
+    process.emit('SIGTERM');
+    await run;
+  } finally { await rm(queue, { recursive: true, force: true }); }
+});
