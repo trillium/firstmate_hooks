@@ -47,6 +47,48 @@ test('normalizes Claude/OpenCode-shaped fixtures to the same semantic context', 
   assert.equal(claude.correlationId, normalizeEvent({ ...common, harness: 'claude-code' })[0].correlationId);
 });
 
+const SPAWN_PIPELINE = "export FM_HOME=/Users/trilliumsmith/fm_home/macbook-ops; B=$FM_HOME/bin; D=/Users/trilliumsmith/fm_home/firstmate/state/macbook-ops.inbox\n$B/fm-spawn.sh coder-playground-review $FM_HOME/projects/brain-playground --scout --harness claude --model claude-sonnet-5-5 --effort medium 2>&1|grep -v '^\u25cf'|tail -1\n$B/fm-secondmate-report.sh working 104ada1ce158ca8a \"Coder playground review (runbooks-opn steps 2, 4, 6) dispatched to scout coder-playground-review; per-step pass/fail with evidence paths to follow.\" 2>&1|tail -1\nmv $D/194.msg $D/handled/";
+const LEDGER_GUARDED = "S=/Users/trilliumsmith/fm_home/macbook-ops/state/egress-allowlist.status; echo \"paused [at=$(date +%s)]: verify-requirements --only T,R3 rerun on fresh workspace (run4) in progress; resumes when it finishes\" >> $S && { [ ! -e '/Users/trilliumsmith/fm_home/macbook-ops/config/fleet-ledger' ] || '/Users/trilliumsmith/fm_home/macbook-ops/bin/fm-fleet-ledger.sh' appended '/Users/trilliumsmith/fm_home/macbook-ops/config' $S >/dev/null 2>&1 || true; }; ls /Users/trilliumsmith/fm_home/macbook-ops/state/egress-allowlist.inbox/*.msg 2>/dev/null";
+const failureOutcomes = (rawCommand, outcome = 'failure') =>
+  normalizeEvent({ harness: 'claude-code', sessionId: 's', callId: 'c', rawCommand, outcome }).map(e => [e.operation, e.outcome]);
+
+test('a failed call is not a failure of an fm-* invocation whose status was masked', () => {
+  // Event 149ba583…: fm-spawn.sh succeeded; the later `mv` failed.
+  assert.deepEqual(failureOutcomes(SPAWN_PIPELINE), [['fm-spawn.sh', 'unknown'], ['fm-secondmate-report.sh', 'unknown']]);
+  // Event 2ed55754…: fm-fleet-ledger.sh is `|| true` guarded; the trailing `ls` glob failed.
+  assert.deepEqual(failureOutcomes(LEDGER_GUARDED), [['fm-fleet-ledger.sh', 'unknown']]);
+  for (const command of ['fm-send.sh a b | tail -1', 'fm-send.sh a b 2>&1|tail -1', 'fm-send.sh a b || true',
+    'fm-send.sh a b &', 'fm-send.sh a b; ls nope', 'fm-send.sh a b\nls nope', 'fm-send.sh a && x | y; ls nope']) {
+    assert.deepEqual(failureOutcomes(command), [['fm-send.sh', 'unknown']], command);
+  }
+});
+
+test('a failed call is still a failure when the fm-* invocation decided its exit status', () => {
+  for (const command of ['fm-spawn.sh task-1', 'bin/fm-spawn.sh task-1 2>&1', 'echo go; fm-spawn.sh task-1',
+    'cd repo && fm-spawn.sh task-1', 'ls x | fm-spawn.sh task-1', 'fm-spawn.sh task-1 && ls nope',
+    'fm-spawn.sh task-1 >/dev/null 2>&1', 'fm-spawn.sh task-1;\n', 'echo a | tee out && fm-spawn.sh b']) {
+    assert.equal(failureOutcomes(command)[0][1], 'failure', command);
+  }
+  assert.deepEqual(failureOutcomes('fm-send.sh a | tail -1; fm-spawn.sh task-1'), [['fm-send.sh', 'unknown'], ['fm-spawn.sh', 'failure']]);
+});
+
+test('masking only reclassifies failures and strips pipeline tails from args', () => {
+  assert.deepEqual(failureOutcomes(SPAWN_PIPELINE, 'success').map(x => x[1]), ['success', 'success']);
+  assert.deepEqual(failureOutcomes('fm-send.sh a | tail -1', 'unknown'), [['fm-send.sh', 'unknown']]);
+  assert.deepEqual(parseSemanticCommand('fm-send.sh a "b | c" 2>&1|tail -1')[0].args, ['a', 'b | c', '2>&1']);
+});
+
+test('the fm-spawn and fm-fleet-ledger failure rules fire only on a decisive failure', async () => {
+  const rules = JSON.parse(await readFile(new URL('../config/fm-hooks.rules.json', import.meta.url), 'utf8')).rules;
+  const fired = (rawCommand) => normalizeEvent({ harness: 'claude-code', rawCommand, outcome: 'failure' })
+    .flatMap(e => rules.filter(r => (r.operation === '*' || r.operation === e.operation) && r.outcomes.includes(e.outcome)).map(r => r.id))
+    .filter(id => id.endsWith('-failure'));
+  assert.deepEqual(fired(SPAWN_PIPELINE), []);
+  assert.deepEqual(fired(LEDGER_GUARDED), []);
+  assert.deepEqual(fired('fm-spawn.sh task-1 --scout'), ['fm-spawn-failure']);
+  assert.deepEqual(fired('fm-fleet-ledger.sh appended /cfg /status'), ['fm-fleet-ledger-failure']);
+});
+
 test('OpenCode result inference retains unknown and does not infer from empty output', () => {
   assert.deepEqual(explicitOpenCodeOutcome({ output: '' }), { outcome: 'unknown', exitCode: null });
   assert.deepEqual(explicitOpenCodeOutcome({ metadata: { exitCode: 7 } }), { outcome: 'failure', exitCode: 7 });

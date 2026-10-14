@@ -173,7 +173,7 @@ The `fleet` store holds one bead per Firstmate task, id `fleet-<task>`, carrying
 
 **Live deployment record (2026-10-11).** Shared clone at `dd6a8da`, `com.fm-hooks.worker` and `com.fm-hooks.bead-poller` loaded. `health --require-poller`, run with the worker's `PATH`, exited 0: `healthy: true`, worker alive, 13 rules live, 0 pending / 0 failed jobs, poller alive. A real `fm-captain-hold.sh --help` call produced a timeline comment on `lifespan-fmh20261011`; a closed `human` review test bead was relayed once through `fm-inbox.sh note`. `health` resolves actions on the *caller's* `PATH`, so run it with the plist's `PATH` (deploy dir first), not a bare shell's.
 
-Deploy and undo steps are in `config/README.md`. Limit: a call piped through `| tail` reports the pipe's exit, not the call's.
+Deploy and undo steps are in `config/README.md`. A failed Bash call reports one exit code, so a `*-failure` rule fires only when the `fm-*` invocation decided it. An invocation piped into another stage, guarded by `||`, backgrounded, or followed by another command after `;` or a newline records outcome `unknown` instead of `failure`; an invocation followed by `&&` still counts, because the chain stops at it.
 
 ## Inbox-connect compatibility
 
