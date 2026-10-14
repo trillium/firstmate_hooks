@@ -2,23 +2,48 @@ import { createHash } from 'node:crypto';
 
 // Split only shell command-list operators outside quotes. This is intentionally not
 // a shell interpreter: semantic matches must be the command word, never text in args.
-export function commandSegments(command) {
-  const segments = [];
+// Each unit records the operator that follows it (`;` `\n` `&&` `||` `|` `&`, or null at
+// the end), which is what decides whether its exit status can be the call's exit status.
+export function commandUnits(command) {
+  const units = [];
   let start = 0, quote = null, escaped = false;
+  const cut = (i, op, width) => { units.push({ text: command.slice(start, i), op }); start = i + width; };
   for (let i = 0; i < command.length; i++) {
-    const c = command[i];
+    const c = command[i], next = command[i + 1], prev = command[i - 1];
     if (escaped) { escaped = false; continue; }
     if (c === '\\' && quote !== "'") { escaped = true; continue; }
     if (quote) { if (c === quote) quote = null; continue; }
     if (c === "'" || c === '"') { quote = c; continue; }
-    if (c === ';' || c === '\n' || (c === '&' && command[i + 1] === '&') || (c === '|' && command[i + 1] === '|')) {
-      segments.push(command.slice(start, i));
-      if ((c === '&' || c === '|') && command[i + 1] === c) i++;
-      start = i + 1;
-    }
+    if (c === ';' || c === '\n') cut(i, c, 1);
+    else if ((c === '&' || c === '|') && next === c) { cut(i, c + c, 2); i++; }
+    // `>|` clobbers; `|&` pipes stderr too; `>&`, `<&`, `&>` and `2>&1` are redirections.
+    else if (c === '|' && prev !== '>') { cut(i, '|', next === '&' ? 2 : 1); if (next === '&') i++; }
+    else if (c === '&' && prev !== '>' && prev !== '<' && next !== '>') cut(i, '&', 1);
   }
-  segments.push(command.slice(start));
-  return segments;
+  units.push({ text: command.slice(start), op: null });
+  return units;
+}
+
+export function commandSegments(command) {
+  return commandUnits(command).map(unit => unit.text);
+}
+
+const isBlank = text => /^[\s{}()]*$/.test(text);
+
+// A failed Bash call carries one exit code: the last command's. An fm-* invocation can have
+// caused it only when nothing downstream replaces that status: it is not piped into another
+// stage, not guarded by `||` or `&`, and no later command follows a `;` or newline. A later
+// `&&` is not a mask: the chain stops at a failing fm-* and exits with its status.
+function decidesExit(units, index) {
+  for (let j = index; j < units.length; j++) {
+    const { op } = units[j];
+    if (op === null) return true;
+    if (op === '&&') continue;
+    if (op === '|' && j > index) continue;
+    if (op === ';' || op === '\n') return units.slice(j + 1).every(unit => isBlank(unit.text));
+    return false;
+  }
+  return true;
 }
 
 function shellWords(text) {
@@ -43,8 +68,9 @@ export const FIRSTMATE_CALL = /^fm[-_][A-Za-z0-9_.-]+$/;
 export function parseSemanticCommand(rawCommand) {
   if (typeof rawCommand !== 'string' || !rawCommand.trim()) return [];
   const found = [];
-  for (const segment of commandSegments(rawCommand)) {
-    const words = shellWords(segment.trim());
+  const units = commandUnits(rawCommand);
+  for (const [unitIndex, unit] of units.entries()) {
+    const words = shellWords(unit.text.trim());
     if (!words.length || words[0].startsWith('#')) continue;
     // Permit ordinary variable assignments before a command; do not expand them.
     let index = 0;
@@ -53,7 +79,7 @@ export function parseSemanticCommand(rawCommand) {
     if (!command) continue;
     const operation = command.split('/').at(-1);
     if (!FIRSTMATE_CALL.test(operation)) continue;
-    found.push({ operation, args: words.slice(index + 1), rawCommand });
+    found.push({ operation, args: words.slice(index + 1), rawCommand, decidesExit: decidesExit(units, unitIndex) });
   }
   return found;
 }
@@ -70,7 +96,7 @@ export function correlationId({ harness, sessionId, callId, rawCommand, timestam
 export function normalizeEvent(input) {
   const semantic = parseSemanticCommand(input.rawCommand);
   if (!semantic.length) return [];
-  return semantic.map(({ operation, args, rawCommand }) => ({
+  return semantic.map(({ operation, args, rawCommand, decidesExit }) => ({
     operation,
     args,
     rawCommand,
@@ -80,7 +106,8 @@ export function normalizeEvent(input) {
     sessionId: input.sessionId ?? null,
     callId: input.callId ?? null,
     correlationId: correlationId({ ...input, rawCommand }),
-    outcome: input.outcome ?? 'unknown',
+    // A failed call is only a failure of this invocation when its status was the call's status.
+    outcome: input.outcome === 'failure' && !decidesExit ? 'unknown' : input.outcome ?? 'unknown',
     exitCode: Number.isInteger(input.exitCode) ? input.exitCode : null,
     startedAt: input.startedAt ?? null,
     finishedAt: input.finishedAt ?? new Date().toISOString(),
