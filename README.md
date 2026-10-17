@@ -215,3 +215,7 @@ Tests use harmless command strings and temporary directories only; they never in
 Everything is TypeScript run by bun: `bun test`, `bun run typecheck` (`bunx tsc --noEmit`), and `bun run <script>` from `package.json`. Entry points carry `#!/usr/bin/env bun`. The launchd plists run `/Users/trilliumsmith/.bun/bin/bun <entry>.ts`.
 
 `bun install` runs `scripts/install-githooks.ts`, which sets `core.hooksPath=.githooks`: `pre-commit` rejects staging any added or modified `.js`/`.mjs`/`.cjs`/`.jsx` file, and `pre-push` runs `bun test` and `bun tsc --noEmit`. To reuse it in another project, copy `scripts/install-githooks.ts` and `.githooks/` there, or run `bun scripts/install-githooks.ts /path/to/repo` (it copies the hooks into a repo that has none).
+
+## License
+
+MIT licensed; see [LICENSE](LICENSE).
