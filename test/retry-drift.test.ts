@@ -161,8 +161,12 @@ test('health counts a job waiting out its backoff as retrying, not as a stuck qu
 
 // --- drift -----------------------------------------------------------------------
 
+// Git hooks run with GIT_DIR and friends exported; inherited, they would point these
+// fixture repos at the real repository, so the fixtures run with a scrubbed environment.
+const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+
 const git = (cwd, ...args) => {
-  const run = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const run = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanEnv() });
   assert.equal(run.status, 0, `git ${args.join(' ')}: ${run.stderr}`);
   return run.stdout.trim();
 };

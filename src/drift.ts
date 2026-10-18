@@ -42,8 +42,12 @@ export async function rulesDrift({ rulesPaths, shippedPath = SHIPPED_RULES }: Re
   return `live rules ${live.path} differ from ${shippedPath} (${detail}): run \`fm-hooks deploy\``;
 }
 
+// Run from a git hook, GIT_DIR and friends are exported and would silently redirect
+// `-C repo` to the hook's own repository, so they are dropped.
+const gitEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+
 function git(repo, args, timeoutMs = 15000) {
-  const run = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', timeout: timeoutMs });
+  const run = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', timeout: timeoutMs, env: gitEnv() });
   return run.status === 0 ? run.stdout.trim() : null;
 }
 
