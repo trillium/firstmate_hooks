@@ -11,7 +11,8 @@ import { workerStatus } from '../src/worker-status.ts';
 const USAGE = `usage: fm-hooks-worker <command> [options]
 
   status                 report worker liveness as JSON and exit
-  health                 check rules are loaded, actions resolve, and jobs drain; exit 1 if not
+  health                 check rules are loaded, actions resolve, jobs drain, and the deploy is current; exit 1 if not
+  retry-failed           move every job in failed/ back to jobs/ with a fresh attempt budget
   drain                  drain the queue once and exit
   watch                  stay resident, draining on every interval
   supervise              run the resident worker as a child and restart it if it exits
@@ -58,10 +59,17 @@ export async function main(argv, { log = console.log, error = console.error }: R
 
   if (options.command === 'health') {
     const { healthStatus } = await import('../src/health.ts');
-    const health = await healthStatus({ root, staleAfterMs: options.staleAfterMs, requirePoller: options.requirePoller });
+    const health = await healthStatus({ root, staleAfterMs: options.staleAfterMs, requirePoller: options.requirePoller,
+      fetchRemote: true });
     log(JSON.stringify(health, null, 2));
     for (const problem of health.problems) error(`fm-hooks health: ${problem}`);
     return health.healthy ? 0 : 1;
+  }
+
+  if (options.command === 'retry-failed') {
+    const { retryFailed } = await import('../src/queue.ts');
+    log(JSON.stringify({ type: 'retry-failed', ...await retryFailed({ root }) }, null, 2));
+    return 0;
   }
 
   if (options.command === 'plist') {

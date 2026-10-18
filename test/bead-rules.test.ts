@@ -1,6 +1,6 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, symlink, utimes, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { observe } from '../src/observer.ts';
@@ -18,7 +18,7 @@ const ACTION = fileURLToPath(new URL('../bin/fm-hooks-bead-action.ts', import.me
 
 // Runs the shipped rule set through the real observer -> queue -> worker execute path,
 // with the action resolved from PATH exactly as the launchd worker resolves it.
-async function pipeline({ dir, env }, commands) {
+async function pipeline({ dir, env }, commands, queueOptions = {}) {
   const bin = join(dir, 'pathbin');
   await mkdir(bin, { recursive: true });
   await symlink(ACTION, join(bin, 'fm-hooks-bead-action')).catch(() => {});
@@ -33,7 +33,7 @@ async function pipeline({ dir, env }, commands) {
         cwd: dir, outcome: command.outcome ?? 'success', startedAt: '2026-10-10T10:00:00.000Z', finishedAt: '2026-10-10T10:00:01.000Z' },
       { root: env.FM_HOOK_QUEUE, rules });
     }
-    return await runQueue({ root: env.FM_HOOK_QUEUE, execute });
+    return await runQueue({ root: env.FM_HOOK_QUEUE, execute, ...queueOptions });
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
@@ -84,14 +84,20 @@ test('end to end: captain hold files a human review bead; fm-send is not touched
   assert.ok(beads[0].labels.includes('human') && beads[0].labels.includes('fm-key:captain-hold-task-h-1'));
 }));
 
-test('end to end: a store outage fails the job into failed/ and a later drain after the fix does not duplicate', async () => withStubs(async ctx => {
+test('end to end: a store outage keeps the job queued and a later drain after the fix delivers it once', async () => withStubs(async ctx => {
   const { env } = ctx;
   const broken = { ...env, STUB_FAIL: 'lifespan:create' };
   const call = { raw: '/h/bin/fm-merge-local.sh task-m' };
-  const failed = await pipeline({ ...ctx, env: broken }, [call]);
-  assert.ok(failed.some(r => r.outcome === 'failed'));
+  const retried = await pipeline({ ...ctx, env: broken }, [call]);
+  assert.ok(retried.some(r => r.outcome === 'retry'), 'the outage defers the job instead of failing it');
+  assert.ok(!retried.some(r => r.outcome === 'failed'));
   const state = await ctx.db();
   assert.equal(state.lifespan?.beads?.['lifespan-fmh20261010'], undefined, 'nothing half-written');
+  // the store is back and the backoff has elapsed: the same job is delivered
+  const later = await pipeline(ctx, [], { now: Date.now() + 60 * 60 * 1000 });
+  assert.ok(later.some(r => r.outcome === 'done'));
+  assert.equal((await readdir(join(env.FM_HOOK_QUEUE, 'failed'))).length, 0);
+  assert.equal((Object.values((await ctx.db()).lifespan.beads) as any[]).length, 1);
 }));
 
 test('rules: brief and fleet-sync comment on success, brief/fleet-sync/send open a card on failure, noisy calls are ledger-only', async () => {
@@ -148,7 +154,7 @@ test('health is green when the worker beats, rules load, actions resolve and the
   const root = join(dir, 'q');
   const rulesPath = await fixtureHealth(root);
   await writeHeartbeat(root, { intervalMs: 1000, cycles: 1 }, 'worker');
-  const health = await healthStatus({ root, env, rulesPaths: [rulesPath] });
+  const health = await healthStatus({ root, env, rulesPaths: [rulesPath], shippedRules: null, checkout: dir });
   assert.deepEqual(health.problems, []);
   assert.equal(health.healthy, true);
 }));
@@ -157,7 +163,7 @@ test('health names each way the pipeline is not live', async () => withStubs(asy
   const root = join(dir, 'q');
   // no worker ever ran, no rules, and an old job sitting in the queue
   const rulesPath = await fixtureHealth(root, { pending: 1, ageMs: 10 * 60 * 1000, rules: false });
-  const health = await healthStatus({ root, env, rulesPaths: [rulesPath], requirePoller: true });
+  const health = await healthStatus({ root, env, rulesPaths: [rulesPath], shippedRules: null, checkout: dir, requirePoller: true });
   assert.equal(health.healthy, false);
   const text = health.problems.join('\n');
   assert.match(text, /worker not live/);
@@ -173,7 +179,7 @@ test('health flags a rule whose action is not on PATH and failed jobs', async ()
     action: { command: 'fm-hooks-no-such-action', args: [] } }] }));
   await writeFile(join(root, 'failed', 'x.json'), '{}');
   await writeHeartbeat(root, { intervalMs: 1000 }, 'worker');
-  const health = await healthStatus({ root, env, rulesPaths: [rulesPath] });
+  const health = await healthStatus({ root, env, rulesPaths: [rulesPath], shippedRules: null, checkout: dir });
   assert.match(health.problems.join('\n'), /not found on PATH: fm-hooks-no-such-action/);
   assert.match(health.problems.join('\n'), /1 job\(s\) in failed/);
 }));

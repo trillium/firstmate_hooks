@@ -75,6 +75,33 @@ export function eventLogPolicy(env = process.env) {
   };
 }
 
+// Retry policy for queued actions. A failed action stays queued with exponential
+// backoff (backoffMs, doubling, capped at maxBackoffMs) until maxAttempts have failed,
+// then moves to failed/. FM_HOOK_MAX_ATTEMPTS=1 restores fail-on-first-error.
+export const DEFAULT_MAX_ATTEMPTS = 5;
+export const DEFAULT_RETRY_BACKOFF_MS = 5000;
+export const DEFAULT_RETRY_MAX_BACKOFF_MS = 10 * 60 * 1000;
+
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : fallback;
+}
+
+export function retryPolicy(env = process.env) {
+  return {
+    maxAttempts: positiveInteger(env.FM_HOOK_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS),
+    backoffMs: wholeNumber(env.FM_HOOK_RETRY_BACKOFF_MS, DEFAULT_RETRY_BACKOFF_MS),
+    maxBackoffMs: wholeNumber(env.FM_HOOK_RETRY_MAX_BACKOFF_MS, DEFAULT_RETRY_MAX_BACKOFF_MS),
+  };
+}
+
+// Longest an action may run before the worker kills it, so a hung store call cannot
+// stall the queue. FM_HOOK_ACTION_TIMEOUT_MS=0 disables the limit.
+export const DEFAULT_ACTION_TIMEOUT_MS = 60000;
+export function actionTimeoutMs(env = process.env) {
+  return wholeNumber(env.FM_HOOK_ACTION_TIMEOUT_MS, DEFAULT_ACTION_TIMEOUT_MS);
+}
+
 // Stable, explicit identity for a migrated legacy queue. Keyed off the resolved real
 // path, so two checkouts of the same repository cannot collide and a nested subagent
 // cannot silently re-parent an existing archive.

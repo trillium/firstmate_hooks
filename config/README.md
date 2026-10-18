@@ -51,6 +51,8 @@ call.
 
 ## Deploying
 
+`bun bin/fm-hooks.ts deploy` does the file steps below in one go and prints the diff of every rules file it replaces (`--dry-run` prints without writing; `--services` also reinstalls the worker and poller agents). `health` reports a live rules file that differs from this directory's, and a clone behind its remote, so drift is visible. The manual steps:
+
 The observer resolves a rules file in this order, and uses the first that exists:
 `$FM_HOOK_RULES`, then `<agent-cwd>/fm-hooks.rules.json`, then
 `<state root>/fm-hooks.rules.json`. The agent's own process resolves that chain with its

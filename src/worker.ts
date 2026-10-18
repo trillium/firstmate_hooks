@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { appendEventLog, runQueue } from './queue.ts';
-import { queueRoot } from './paths.ts';
+import { actionTimeoutMs, queueRoot } from './paths.ts';
 import { writeHeartbeat } from './heartbeat.ts';
 
 export const DEFAULT_INTERVAL_MS = 1000;
@@ -21,7 +21,11 @@ export function interpolate(value, job) {
     .replaceAll('{ruleId}', job.ruleId);
 }
 
-export function execute(job) {
+// A hung action (a store call that never returns) must not stall the queue: it is
+// terminated after the timeout and fails like any other action, so it is retried.
+const KILL_GRACE_MS = 2000;
+
+export function execute(job, { timeoutMs = actionTimeoutMs() }: Record<string, any> = {}) {
   const action = job.action;
   if (!action || typeof action.command !== 'string' || !Array.isArray(action.args) || !action.args.every(x => typeof x === 'string')) {
     throw new Error('action must have a command and string args array');
@@ -32,8 +36,21 @@ export function execute(job) {
       env: { ...process.env, FM_HOOK_CORRELATION_ID: job.correlationId,
         FM_HOOK_IDEMPOTENCY_KEY: job.id }
     });
-    child.once('error', reject);
-    child.once('exit', code => code === 0 ? resolve() : reject(new Error(`action exited ${code}`)));
+    let timedOut = false;
+    let killTimer;
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
+    }, timeoutMs) : null;
+    const settle = () => { clearTimeout(timer); clearTimeout(killTimer); };
+    child.once('error', error => { settle(); reject(error); });
+    child.once('exit', code => {
+      settle();
+      if (timedOut) reject(new Error(`action timed out after ${timeoutMs}ms`));
+      else if (code === 0) resolve();
+      else reject(new Error(`action exited ${code}`));
+    });
   });
 }
 
@@ -59,7 +76,7 @@ export async function watchQueue({
   const pollMs = Number.isFinite(intervalMs) ? intervalMs
     : Number(env.FM_HOOK_WORKER_INTERVAL_MS) || DEFAULT_INTERVAL_MS;
   const startedAt = new Date().toISOString();
-  const state = { startedAt, cycles: 0, processed: 0, done: 0, failed: 0, lastResultAt: null, lastError: null };
+  const state = { startedAt, cycles: 0, processed: 0, done: 0, failed: 0, retried: 0, lastResultAt: null, lastError: null };
   let lastBeat = 0;
   // Logged through the observer's own writer so a single `tail -f events.jsonl` shows
   // both halves of the pipeline: what was observed, and who is draining it.
@@ -70,7 +87,7 @@ export async function watchQueue({
     if (signal?.aborted) break;
     let results = [];
     try {
-      results = await runQueue({ root, execute: run });
+      results = await runQueue({ root, execute: run, env });
       state.lastError = null;
     } catch (error) {
       // A queue-level failure must not end the loop; a worker that dies on one bad
@@ -82,6 +99,7 @@ export async function watchQueue({
     state.processed += results.length;
     state.done += results.filter(result => result.outcome === 'done').length;
     state.failed += results.filter(result => result.outcome === 'failed').length;
+    state.retried += results.filter(result => result.outcome === 'retry').length;
     for (const result of results) onResult(result);
 
     if (results.length) {
