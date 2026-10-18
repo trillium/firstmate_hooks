@@ -1,9 +1,10 @@
-import { access, constants, readdir, stat } from 'node:fs/promises';
+import { access, constants, readFile, readdir, stat } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { defaultRulesPaths, queueRoot } from './paths.ts';
 import { loadRules } from './queue.ts';
 import { workerStatus } from './worker-status.ts';
 import { pollerStatus } from './bead-poller.ts';
+import { CHECKOUT, SHIPPED_RULES, cloneDrift, rulesDrift } from './drift.ts';
 
 // `status` answers "is the worker process beating". That is necessary and not enough:
 // a beating worker with no rules loaded, a rule whose action cannot be found, or a
@@ -22,16 +23,21 @@ async function executable(command, env) {
 async function jobs(root, now) {
   const count = async name => (await readdir(join(root, name)).catch(() => [])).filter(file => file.endsWith('.json'));
   const pending = await count('jobs');
-  let oldestAgeMs = 0;
+  let oldestAgeMs = 0, retrying = 0;
   for (const name of pending) {
+    // A job waiting out a retry backoff is not stuck: it is excluded from the drain age
+    // and counted separately, so a long backoff cannot read as a wedged worker.
+    const job = await readFile(join(root, 'jobs', name), 'utf8').then(JSON.parse, () => ({}));
+    if (Date.parse(job.notBefore) > now) { retrying++; continue; }
     const info = await stat(join(root, 'jobs', name)).catch(() => null);
     if (info) oldestAgeMs = Math.max(oldestAgeMs, now - info.mtimeMs);
   }
-  return { pending: pending.length, oldestAgeMs: Math.round(oldestAgeMs), failed: (await count('failed')).length };
+  return { pending: pending.length, retrying, oldestAgeMs: Math.round(oldestAgeMs), failed: (await count('failed')).length };
 }
 
 export async function healthStatus({ root = queueRoot(), env = process.env, now = Date.now(), staleAfterMs,
-  requirePoller = false, rulesPaths = defaultRulesPaths(env) }: Record<string, any> = {}) {
+  requirePoller = false, rulesPaths = defaultRulesPaths(env), shippedRules = SHIPPED_RULES,
+  checkout = CHECKOUT, fetchRemote = false }: Record<string, any> = {}) {
   const worker = await workerStatus({ root, staleAfterMs, now });
   const problems = [];
   if (!worker.ruleEvaluationLive) problems.push(`worker not live: ${worker.reason}`);
@@ -56,11 +62,17 @@ export async function healthStatus({ root = queueRoot(), env = process.env, now 
   if (!draining) problems.push(`jobs not draining: ${queue.pending} pending, oldest ${queue.oldestAgeMs}ms (limit ${limitMs}ms)`);
   if (queue.failed) problems.push(`${queue.failed} job(s) in failed/ need inspection`);
 
+  // Drift: the pipeline can be fully live and still be running a stale version of itself.
+  const drift = { rules: await rulesDrift({ rulesPaths, shippedPath: shippedRules }).catch(() => null),
+    clone: cloneDrift({ repo: checkout, fetch: fetchRemote }) };
+  if (drift.rules) problems.push(drift.rules);
+  if (drift.clone) problems.push(drift.clone);
+
   const poller = await pollerStatus({ root, now });
   if (requirePoller && !poller.alive) problems.push(`bead poller not live: ${poller.reason}`);
 
   return { queue: root, healthy: problems.length === 0, problems, worker: { alive: worker.alive, reason: worker.reason,
     cycles: worker.cycles, done: worker.done, failed: worker.failed },
   rules: { paths: rulesPaths, count: rules.length, live: rulesLive, missingCommands: missing, error: rulesError },
-  jobs: { ...queue, limitMs, draining }, poller };
+  jobs: { ...queue, limitMs, draining }, drift, poller };
 }

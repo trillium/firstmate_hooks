@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeOnce } from './atomic.ts';
 import { ensureQueue } from './migrate.ts';
-import { defaultRulesPaths, eventLogPolicy, queueRoot } from './paths.ts';
+import { defaultRulesPaths, eventLogPolicy, queueRoot, retryPolicy } from './paths.ts';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const safe = value => String(value).replace(/[^A-Za-z0-9_.-]/g, '_');
@@ -127,7 +127,25 @@ async function claimLock(path) {
   return null;
 }
 
-export async function runQueue({ root = queueRoot(), execute }) {
+// A failed action is retried, not dropped: the failures seen in production were store
+// outages that clear on their own, and a job moved to failed/ on the first one was lost
+// for good. The job stays in jobs/ with an `attempts` count and a `notBefore` time, and
+// only lands in failed/ once it has used every attempt.
+export function backoffDelayMs(attempts, { backoffMs, maxBackoffMs }) {
+  return Math.min(maxBackoffMs, backoffMs * 2 ** Math.max(0, attempts - 1));
+}
+
+// Replace a job file in place. Rename is atomic, so a reader sees the old or the new job.
+async function rewriteJob(path, job) {
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const file = await open(temporary, 'wx', 0o600);
+  try { await file.writeFile(`${JSON.stringify(job)}\n`); await file.sync(); } finally { await file.close(); }
+  try { await rename(temporary, path); } catch (error) { await rm(temporary, { force: true }); throw error; }
+}
+
+export async function runQueue({ root = queueRoot(), execute, env = process.env, now = Date.now(),
+  ...overrides }: Record<string, any> = {}) {
+  const policy = { ...retryPolicy(env), ...overrides };
   await ensureQueue(root);
   const jobs = join(root, 'jobs'), done = join(root, 'done'), failed = join(root, 'failed');
   await Promise.all([mkdir(jobs, { recursive: true }), mkdir(done, { recursive: true }), mkdir(failed, { recursive: true })]);
@@ -139,15 +157,24 @@ export async function runQueue({ root = queueRoot(), execute }) {
     if (!claimed) continue;
     try {
       const job = JSON.parse(await readFile(source, 'utf8'));
+      if (Date.parse(job.notBefore) > now) continue;
       try {
         await execute(job);
         await rename(source, target);
         results.push({ id: job.id, outcome: 'done' });
       } catch (error) {
+        const attempts = (Number.isInteger(job.attempts) ? job.attempts : 0) + 1;
+        if (attempts < policy.maxAttempts) {
+          const notBefore = new Date(now + backoffDelayMs(attempts, policy)).toISOString();
+          await rewriteJob(source, { ...job, attempts, notBefore, lastError: String(error) });
+          results.push({ id: job.id, outcome: 'retry', attempts, notBefore, error: String(error) });
+          continue;
+        }
+        await rewriteJob(source, { ...job, attempts, lastError: String(error) });
         await rename(source, join(failed, name));
         const errorFile = await open(join(failed, `${name}.error`), 'w', 0o600);
         try { await errorFile.writeFile(String(error)); } finally { await errorFile.close(); }
-        results.push({ id: job.id, outcome: 'failed', error: String(error) });
+        results.push({ id: job.id, outcome: 'failed', attempts, error: String(error) });
       }
     } finally {
       await claimed.close();
@@ -155,4 +182,25 @@ export async function runQueue({ root = queueRoot(), execute }) {
     }
   }
   return results;
+}
+
+// Put every job in failed/ back in the queue with a fresh attempt budget. Used after the
+// outage that failed them is fixed. A job whose id is already queued is left in failed/.
+export async function retryFailed({ root = queueRoot() }: Record<string, any> = {}) {
+  await ensureQueue(root);
+  const jobs = join(root, 'jobs'), failed = join(root, 'failed');
+  await mkdir(jobs, { recursive: true });
+  const requeued = [], skipped = [];
+  for (const name of (await readdir(failed).catch(() => [])).filter(file => file.endsWith('.json')).sort()) {
+    const target = join(jobs, name);
+    if (await stat(target).then(() => true, () => false)) { skipped.push(name); continue; }
+    let job;
+    try { job = JSON.parse(await readFile(join(failed, name), 'utf8')); } catch { skipped.push(name); continue; }
+    delete job.attempts; delete job.notBefore; delete job.lastError;
+    if (!await writeOnce(target, job)) { skipped.push(name); continue; }
+    await rm(join(failed, name), { force: true });
+    await rm(join(failed, `${name}.error`), { force: true });
+    requeued.push(name);
+  }
+  return { requeued, skipped };
 }
