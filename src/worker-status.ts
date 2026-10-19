@@ -27,7 +27,7 @@ async function describe(root, role, staleAfterMs, now) {
     startedAt: beat.startedAt ?? null, updatedAt: beat.updatedAt ?? null,
     restarts: beat.restarts ?? null, lastExit: beat.lastExit ?? null,
     cycles: beat.cycles ?? 0, processed: beat.processed ?? 0, done: beat.done ?? 0,
-    failed: beat.failed ?? 0, intervalMs: beat.intervalMs ?? null,
+    failed: beat.failed ?? 0, retried: beat.retried ?? 0, intervalMs: beat.intervalMs ?? null,
     lastResultAt: beat.lastResultAt ?? null, lastError: beat.lastError ?? null,
     reason: alive ? 'running and beating'
       : !running ? `pid ${beat.pid} is not running`
@@ -44,7 +44,7 @@ export async function workerStatus({ root = queueRoot(), staleAfterMs = DEFAULT_
     // this is the headline field. A live supervisor over a dead worker is false.
     ruleEvaluationLive: worker.alive,
     cycles: worker.cycles ?? 0, processed: worker.processed ?? 0,
-    done: worker.done ?? 0, failed: worker.failed ?? 0,
+    done: worker.done ?? 0, failed: worker.failed ?? 0, retried: worker.retried ?? 0,
     intervalMs: worker.intervalMs ?? null,
     lastResultAt: worker.lastResultAt ?? null, lastError: worker.lastError ?? null,
     supervisor,
