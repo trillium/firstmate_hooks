@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rename, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { replaceJson } from './atomic.ts';
 import { clip } from './bead-actions.ts';
 import { fleetRecord, TASK_OK } from './fleet-beads.ts';
 import { captureScout } from './scout-capture.ts';
@@ -35,12 +36,12 @@ export function parseStatusLine(text) {
   return { state: match[1], at: match[2] ? Number(match[2]) : null, key: match[3] ?? null, text: match[4] };
 }
 
+// The cursor is replaced atomically, its temporary removed on a failed write and the
+// directory swept of dead writers' temporaries (atomic.ts), so a poller killed between
+// writing and renaming leaves nothing beside it.
 async function writeJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  const file = await open(temporary, 'wx', 0o600);
-  try { await file.writeFile(`${JSON.stringify(value)}\n`); await file.sync(); } finally { await file.close(); }
-  await rename(temporary, path);
+  await replaceJson(path, value);
 }
 
 export async function readStatusCursor(root) {

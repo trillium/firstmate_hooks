@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { replaceJson } from './atomic.ts';
 import { DEFAULT_STALE_MS, pidAlive, readHeartbeat, writeHeartbeat } from './heartbeat.ts';
 import { CLOSED_BY, storeRunner } from './bead-actions.ts';
 import { queueRoot } from './paths.ts';
@@ -33,12 +34,12 @@ const clip = (value, max) => (String(value).length > max ? `${String(value).slic
 export const pollerDir = root => join(root, 'poller');
 const cursorPath = root => join(pollerDir(root), 'cursor.json');
 
+// The cursor is replaced atomically, its temporary removed on a failed write and the
+// directory swept of dead writers' temporaries (atomic.ts), so a poller killed between
+// writing and renaming leaves nothing beside it.
 async function writeJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  const file = await open(temporary, 'wx', 0o600);
-  try { await file.writeFile(`${JSON.stringify(value)}\n`); await file.sync(); } finally { await file.close(); }
-  await rename(temporary, path);
+  await replaceJson(path, value);
 }
 
 export async function readCursor(root) {

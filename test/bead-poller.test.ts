@@ -1,8 +1,11 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { pollOnce, pollerStatus, watchPoller, readCursor, firstmateRelay } from '../src/bead-poller.ts';
+import { pollOnce, pollerDir, pollerStatus, watchPoller, readCursor, firstmateRelay } from '../src/bead-poller.ts';
+import { pidAlive } from '../src/heartbeat.ts';
 import { withStubs } from '../testlib/stub-env.ts';
 
 const seed = (env, store, bead) => (async () => {
@@ -23,6 +26,21 @@ test('first poll initializes the cursor and relays nothing, even with old closur
   assert.equal(result.initialized, true);
   assert.deepEqual(sent, []);
   assert.equal((await readCursor(root(env))).since, '2026-10-10T12:00:00.000Z');
+}));
+
+// robots-59gm1: the same temporary-and-rename shape as the status-tail cursor; see that suite.
+test('a poll sweeps the cursor temporaries dead writers left and spares a live writer', async () => withStubs(async ({ env }) => {
+  const directory = pollerDir(root(env));
+  await mkdir(directory, { recursive: true });
+  const dead = spawnSync('true').pid;
+  assert.ok(dead > 0 && !pidAlive(dead), 'the predecessor must be a real pid that is gone');
+  const litter = `cursor.json.${dead}.${randomUUID()}.tmp`;
+  const inFlight = `cursor.json.${process.pid}.${randomUUID()}.tmp`;
+  for (const name of [litter, inFlight]) await writeFile(join(directory, name), '');
+  const result = await pollOnce({ root: root(env), env, relay: recorder().relay, now: T0 });
+  assert.equal(result.initialized, true);
+  assert.deepEqual((await readdir(directory)).sort(), ['cursor.json', inFlight].sort(),
+    "the dead writer's temporary is gone; the live writer's and the cursor stay");
 }));
 
 test('a bead closed minutes before the poller first started is not backfilled', async () => withStubs(async ({ env }) => {

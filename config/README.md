@@ -51,7 +51,7 @@ call.
 
 ## Deploying
 
-`bun bin/fm-hooks.ts deploy` does the file steps below in one go and prints the diff of every rules file it replaces (`--dry-run` prints without writing; `--services` also reinstalls the worker and poller agents). `health` reports a live rules file that differs from this directory's, and a clone behind its remote, so drift is visible. The manual steps:
+`bun bin/fm-hooks.ts deploy` does the file steps below in one go and prints the diff of every rules file it replaces (`--dry-run` prints without writing; `--services` also reinstalls the worker and poller agents). Each rules file is replaced through a `fm-hooks.rules.json.<pid>.<uuid>.tmp` temporary beside it that is removed on a failed write, and the write removes such temporaries left by a deploy killed between writing and renaming. `health` reports a live rules file that differs from this directory's, and a clone behind its remote, so drift is visible. The manual steps:
 
 The observer resolves a rules file in this order, and uses the first that exists:
 `$FM_HOOK_RULES`, then `<agent-cwd>/fm-hooks.rules.json`, then

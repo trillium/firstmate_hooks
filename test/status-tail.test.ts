@@ -1,9 +1,12 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { appendFile, mkdir, rename, truncate, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { appendFile, mkdir, readdir, rename, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { storeRunner } from '../src/bead-actions.ts';
 import { forgetEnsuredStores } from '../src/fleet-beads.ts';
+import { pidAlive } from '../src/heartbeat.ts';
 import { parseStatusLine, readStatusCursor, tailStatusOnce } from '../src/status-tail.ts';
 import { main as pollerCli } from '../bin/fm-hooks-bead-poller.ts';
 import { watchPoller } from '../src/bead-poller.ts';
@@ -49,6 +52,28 @@ test('a restart with the same cursor appends nothing, and a lost cursor does not
   // no cursor: counts as a first run again, so nothing is re-read -- and even a forced re-read is deduplicated by cid
   await tail(env);
   assert.equal((await db()).fleet.beads['fleet-t'].comments.length, 1);
+}));
+
+// robots-59gm1: the cursor was written through a cursor.json.<pid>.<uuid>.tmp temporary and
+// renamed, and a poller killed between the two left the temporary beside the cursor for good;
+// the live poller directory held one such zero-byte file from 2026-10-13. A pass now sweeps
+// the temporaries of writers that are gone.
+test('a tail pass sweeps the cursor temporaries dead writers left and spares a live writer and other files', async () => withStubs(async ({ env }) => {
+  await setup(env);
+  const directory = join(env.FM_HOOK_QUEUE, 'status-tail');
+  await mkdir(directory, { recursive: true });
+  // A real process that has already exited: its pid is gone the way a killed poller's is.
+  const dead = spawnSync('true').pid;
+  assert.ok(dead > 0 && !pidAlive(dead), 'the predecessor must be a real pid that is gone');
+  const litter = `cursor.json.${dead}.${randomUUID()}.tmp`;
+  // A temporary carrying a live pid is a write in flight; another file's temporary is not this writer's.
+  const inFlight = `cursor.json.${process.pid}.${randomUUID()}.tmp`;
+  const other = `other.json.${dead}.${randomUUID()}.tmp`;
+  for (const name of [litter, inFlight, other]) await writeFile(join(directory, name), '');
+  await tail(env);
+  assert.deepEqual((await readdir(directory)).sort(), ['cursor.json', inFlight, other].sort(),
+    "the dead writer's temporary is gone; the live writer's, another file's, and the cursor stay");
+  assert.ok(await readStatusCursor(env.FM_HOOK_QUEUE), 'and the cursor itself landed');
 }));
 
 test('a new status file appearing after the first run is read from its start', async () => withStubs(async ({ env, db }) => {
