@@ -115,3 +115,26 @@ test('the CLI status-tail --once runs one pass; the watch loop tails each cycle 
   await watchPoller({ root: env.FM_HOOK_QUEUE, env: { ...env, FM_HOOK_STATUS_TAIL: '0' }, relay: async () => ({ via: 'note' }), intervalMs: 5, maxCycles: 1, onResult() {} });
   assert.equal((await db()).fleet.beads['fleet-t'].comments.length, 1, 'disabled tail writes nothing');
 }));
+
+test('a scout capture failure holds the cursor at the done line; the retry writes the brain bead once and repeats no fleet comment', async () => withStubs(async ({ env, db }) => {
+  await setup(env);
+  await writeFile(statusFile(env, 'sc'), '');
+  await tail(env);
+  await mkdir(join(env.FM_HOME, 'data', 'sc'), { recursive: true });
+  await writeFile(join(env.FM_HOME, 'data', 'sc', 'report.md'), '# R\n\nfindings\n');
+  await appendFile(statusFile(env, 'sc'), 'done [at=1791626400]: report written at data/sc/report.md; found it\n');
+  const brokenEnv = { ...env, STUB_FAIL: 'brain:create' };
+  const broken = await tailStatusOnce({ root: env.FM_HOOK_QUEUE, env: brokenEnv, run: storeRunner(brokenEnv) });
+  assert.equal(broken.failed.length, 1);
+  assert.equal((await readStatusCursor(env.FM_HOOK_QUEUE)).sc.offset, 0);
+  let state = await db();
+  assert.equal(state.fleet.beads['fleet-sc'].comments.length, 1, 'the status comment landed before the capture failed');
+  assert.equal(state.brain?.beads['brain-fmhscout-sc'], undefined);
+  forgetEnsuredStores();
+  const retried = await tail(env);
+  assert.equal(retried.recorded[0].scout.wrote, true);
+  state = await db();
+  assert.match(state.brain.beads['brain-fmhscout-sc'].description, /found it/);
+  assert.deepEqual(stateLabels(state, 'sc'), ['fm-state:done']);
+  assert.equal(state.fleet.beads['fleet-sc'].comments.length, 2, 'one status comment, one capture link');
+}, { stores: ['projects', 'review', 'lifespan', 'task', 'fleet', 'brain'] }));

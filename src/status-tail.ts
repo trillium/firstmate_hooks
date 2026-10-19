@@ -3,6 +3,7 @@ import { mkdir, open, readFile, readdir, rename, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { clip } from './bead-actions.ts';
 import { fleetRecord, TASK_OK } from './fleet-beads.ts';
+import { captureScout } from './scout-capture.ts';
 
 // Crew status transitions -> fleet bead. A crew appends `state [at=<epoch>]: text` lines to
 // `$FM_HOME/state/<task>.status`; several writers feed that file (the crew itself, Firstmate,
@@ -13,6 +14,12 @@ import { fleetRecord, TASK_OK } from './fleet-beads.ts';
 // the closure poller, or months of history would land in one cycle. A file that appears after
 // that starts at its beginning. The comment's correlation id is a hash of (task, byte offset,
 // line), stable across restarts, so a crash between the write and the cursor repeats nothing.
+//
+// A `done` line is also the moment the fleet bead reaches state done, so it runs the scout
+// report capture (scout-capture.ts) for that task: a finished scout's report reaches `brain`
+// from here even when the hook never saw the status command. The capture's bead id is
+// deterministic, so the hook path and this one converge on one bead. A capture failure holds
+// the cursor at the line like any store failure; the fleet comment it repeats is deduplicated.
 
 export const STATE_FROM_LINE = {
   working: 'working', 'needs-decision': 'needs-decision', blocked: 'blocked', paused: 'paused', done: 'done', failed: 'failed',
@@ -88,7 +95,9 @@ export async function tailStatusOnce({ root, env = process.env, run, now = Date.
         const result = await fleetRecord(run, env, { correlationId, finishedAt, harness: 'status', sessionId: task },
           { task, state: STATE_FROM_LINE[parsed.state],
             line: `status ${parsed.state}${parsed.key ? ` [key=${parsed.key}]` : ''}: ${clip(parsed.text, 300)}` });
-        recorded.push({ task, state: parsed.state, wrote: result.wrote });
+        const entry: Record<string, any> = { task, state: parsed.state, wrote: result.wrote };
+        if (parsed.state === 'done') entry.scout = await captureScout({ run, env, home, task, line: parsed.text });
+        recorded.push(entry);
         cursor[task].offset = line.offset + Buffer.byteLength(line.text) + 1;
       } catch (error) {
         // Stop at the failed line so the next cycle retries it (and everything after it).
