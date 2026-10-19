@@ -16,6 +16,13 @@ import { withStubs } from '../testlib/stub-env.ts';
 const RULES = fileURLToPath(new URL('../config/fm-hooks.rules.json', import.meta.url));
 const ACTION = fileURLToPath(new URL('../bin/fm-hooks-bead-action.ts', import.meta.url));
 
+// robots-lqep3: every job a pipeline test drains is a real fm-hooks-bead-action process, and each
+// of those drives the store stubs as processes too. The brief/fleet-sync test below launches about
+// 120 of them in a row: 3.4-4.2s on a busy machine, past 5s with eight copies of this file running
+// at once, and once past 5s under the pre-push hook. bun's default 5000ms per-test budget was never
+// sized for that, so the pipeline tests carry their own, sized to the work rather than to the default.
+const PIPELINE_TIMEOUT_MS = 30_000;
+
 // Runs the shipped rule set through the real observer -> queue -> worker execute path,
 // with the action resolved from PATH exactly as the launchd worker resolves it.
 async function pipeline({ dir, env }, commands, queueOptions = {}) {
@@ -68,21 +75,21 @@ test('end to end: a successful fm-spawn call becomes a ledger line and a project
   assert.equal(state.fleet.beads['fleet-task-a'].comments.length, 1);
   assert.ok(state.fleet.beads['fleet-task-a'].labels.includes('fm-state:dispatched'));
   assert.match(state.projects.beads['project-fmh-demo'].comments[0].text, /dispatched task-a on demo/);
-}));
+}), { timeout: PIPELINE_TIMEOUT_MS });
 
 test('end to end: a failed call is ledgered but not commented on a project', async () => withStubs(async ctx => {
   await pipeline(ctx, [{ raw: '/h/bin/fm-spawn.sh task-a /h/projects/demo', outcome: 'failure' }]); 
   const state = await ctx.db();
   assert.match(state.lifespan.beads['lifespan-fmh20261010'].comments[0].text, /fm-spawn\.sh failure/);
   assert.equal(state.projects, undefined);
-}));
+}), { timeout: PIPELINE_TIMEOUT_MS });
 
 test('end to end: captain hold files a human review bead; fm-send is not touched by the hook', async () => withStubs(async ctx => {
   await pipeline(ctx, [{ raw: '/h/bin/fm-captain-hold.sh hold task-h --reason "pick a db"' }]);
   const beads = (Object.values((await ctx.db()).review.beads) as any[]);
   assert.equal(beads.length, 1);
   assert.ok(beads[0].labels.includes('human') && beads[0].labels.includes('fm-key:captain-hold-task-h-1'));
-}));
+}), { timeout: PIPELINE_TIMEOUT_MS });
 
 test('end to end: a store outage keeps the job queued and a later drain after the fix delivers it once', async () => withStubs(async ctx => {
   const { env } = ctx;
@@ -98,7 +105,7 @@ test('end to end: a store outage keeps the job queued and a later drain after th
   assert.ok(later.some(r => r.outcome === 'done'));
   assert.equal((await readdir(join(env.FM_HOOK_QUEUE, 'failed'))).length, 0);
   assert.equal((Object.values((await ctx.db()).lifespan.beads) as any[]).length, 1);
-}));
+}), { timeout: PIPELINE_TIMEOUT_MS });
 
 test('rules: brief and fleet-sync comment on success, brief/fleet-sync/send open a card on failure, noisy calls are ledger-only', async () => {
   const { rules } = JSON.parse(await readFile(RULES, 'utf8'));
@@ -133,7 +140,7 @@ test('end to end: a successful fm-brief and fm-fleet-sync each comment on their 
   assert.match(projects.beads['project-fmh-firstmate'].comments[0].text, /synced all project clones/);
   assert.equal((Object.values(projects.beads) as any[]).flatMap(b => b.comments).length, 3, 'a secondmate charter names no project and is ledger-only');
   assert.equal(lifespan.beads['lifespan-fmh20261010'].comments.length, 4);
-}));
+}), { timeout: PIPELINE_TIMEOUT_MS });
 
 const fixtureHealth = async (root, { pending = 0, ageMs = 0, rules = true } = {}) => {
   await mkdir(join(root, 'jobs'), { recursive: true });
