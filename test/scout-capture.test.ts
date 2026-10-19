@@ -1,9 +1,11 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runBeadAction } from '../src/bead-actions.ts';
-import { captainCalls, scoutDone } from '../src/scout-capture.ts';
+import { runBeadAction, storeRunner } from '../src/bead-actions.ts';
+import { forgetEnsuredStores } from '../src/fleet-beads.ts';
+import { captainCalls, scoutBeadId, scoutDone } from '../src/scout-capture.ts';
+import { tailStatusOnce } from '../src/status-tail.ts';
 import { withStubs } from '../testlib/stub-env.ts';
 
 const STORES = ['projects', 'review', 'lifespan', 'task', 'brain', 'fleet'];
@@ -19,9 +21,17 @@ Findings.
 Captain call: pick the retention window
 `;
 
-async function scoutEvent(env: any, { task = 'demo-scout', line = 'report written at /h/data/demo-scout/report.md; found two things', report = REPORT, correlationId = 'a'.repeat(64) }: any = {}) {
+// The done line scout talon-phone-grammar-scout-q2 appended on 2026-10-19 (robots-fkb70), and the Bash
+// command the hook observed for it: the `[at=]` stamp is a shell variable the hook saw unexpanded.
+const TALON_TASK = 'talon-phone-grammar-scout-q2';
+const TALON_ID = 'brain-fmhscout-talon-phone-grammar-scout-q2';
+const TALON_LINE = 'report written at data/talon-phone-grammar-scout-q2/report.md; Talon AM+decoder+lexicon shown portable on Mac with real blobs (CoreML 10 ms/utterance, w2ldecode built for iOS arm64, DFA grammar decode verified); iPhone spike and grammar compiler are the remaining work';
+const TALON_REPORT = '# Porting Talon\'s speech engine to the iPhone: the how\n\nTask `talon-phone-grammar-scout-q2`, scout report, 2026-10-19.\n\n## Verdict\n\nThe Talon recognizer is portable.\n';
+const talonCommand = (home: string, stamp = '$E') => `ls ${home}/state/${TALON_TASK}.inbox/*.msg 2>/dev/null; E=$(date +%s); echo "done [at=${stamp}]: ${TALON_LINE}" >> '${home}/state/${TALON_TASK}.status' && { [ ! -e '${home}/config/fleet-ledger' ] || '${home}/bin/fm-fleet-ledger.sh' appended '${home}/config' '${home}/state/${TALON_TASK}.status' >/dev/null 2>&1 || true; }; tail -1 '${home}/state/${TALON_TASK}.status'`;
+
+async function scoutEvent(env: any, { task = 'demo-scout', line = 'report written at /h/data/demo-scout/report.md; found two things', report = REPORT, correlationId = 'a'.repeat(64), rawCommand = null }: any = {}) {
   const status = join(env.FM_HOME, 'state', `${task}.status`);
-  const rawCommand = `echo "done [at=1791700000]: ${line}" >> '${status}' && { [ ! -e '${env.FM_HOME}/config/fleet-ledger' ] || '${env.FM_HOME}/bin/fm-fleet-ledger.sh' appended '${env.FM_HOME}/config' '${status}' >/dev/null 2>&1 || true; }`;
+  rawCommand ??= `echo "done [at=1791700000]: ${line}" >> '${status}' && { [ ! -e '${env.FM_HOME}/config/fleet-ledger' ] || '${env.FM_HOME}/bin/fm-fleet-ledger.sh' appended '${env.FM_HOME}/config' '${status}' >/dev/null 2>&1 || true; }`;
   const event = { operation: 'fm-fleet-ledger.sh', args: ['appended', `${env.FM_HOME}/config`, status], rawCommand, cwd: '/tmp',
     harness: 'claude', sessionId: 's1', outcome: 'success', finishedAt: '2026-10-11T10:00:01.000Z', correlationId };
   await mkdir(join(env.FM_HOOK_QUEUE, 'events'), { recursive: true });
@@ -35,6 +45,13 @@ async function scoutEvent(env: any, { task = 'demo-scout', line = 'report writte
 const act = (event: any, env: any) => runBeadAction({ kind: 'scout-report', operation: event.operation, correlationId: event.correlationId, env, root: env.FM_HOOK_QUEUE });
 const seed = (env: any, db: any) => writeFile(env.STUB_DB, JSON.stringify(db));
 const bead = (id: string, extra = {}) => ({ id, title: id, labels: [], status: 'open', comments: [], ...extra });
+const tail = (env: any) => tailStatusOnce({ root: env.FM_HOOK_QUEUE, env, run: storeRunner(env) });
+const statusFile = (env: any, task: string) => join(env.FM_HOME, 'state', `${task}.status`);
+async function report(env: any, task: string, text: string) {
+  await mkdir(join(env.FM_HOME, 'data', task), { recursive: true });
+  await writeFile(join(env.FM_HOME, 'data', task, 'report.md'), text);
+}
+async function stateDir(env: any) { await mkdir(join(env.FM_HOME, 'state'), { recursive: true }); forgetEnsuredStores(); }
 
 test('scoutDone reads the done line and task from the ledger append, and ignores other status lines', () => {
   const ok = scoutDone({ operation: 'fm-fleet-ledger.sh', args: ['appended', '/c', '/h/state/t-1.status'],
@@ -100,4 +117,81 @@ test('a missing fleet bead is reported, not invented; a report with no calls fil
 test('a brain store failure propagates so the job lands in failed/', async () => withStubs(async ({ env }) => {
   const event = await scoutEvent(env);
   await assert.rejects(act(event, { ...env, STUB_FAIL: 'brain:create' }));
+}, { stores: STORES }));
+
+test('scoutDone reads the talon-phone-grammar-scout-q2 done line, whose [at=] stamp is a shell variable the hook saw unexpanded (robots-fkb70)', () => {
+  const home = '/Users/x/fm_home/firstmate';
+  const event = (stamp: string) => ({ operation: 'fm-fleet-ledger.sh', args: ['appended', `${home}/config`, `${home}/state/${TALON_TASK}.status`, '>/dev/null', '2>&1'], rawCommand: talonCommand(home, stamp) });
+  for (const stamp of ['$E', '$(date +%s)', '1792432383']) {
+    assert.deepEqual(scoutDone(event(stamp)), { task: TALON_TASK, line: TALON_LINE, statusPath: `${home}/state/${TALON_TASK}.status` }, `stamp ${stamp}`);
+  }
+  assert.equal(scoutDone({ ...event('$E'), rawCommand: talonCommand(home).replace('"done [at=$E]:', '"working [at=$E]:') }), null);
+});
+
+test('the hook path captures the talon scout from its real command: one brain bead whose summary is the verdict', async () => withStubs(async ({ env, db }) => {
+  const event = await scoutEvent(env, { task: TALON_TASK, report: TALON_REPORT, rawCommand: talonCommand(env.FM_HOME) });
+  const result = await act(event, env);
+  assert.equal(result.target, TALON_ID);
+  assert.equal(scoutBeadId(TALON_TASK), TALON_ID);
+  assert.equal(result.wrote, true);
+  const created = (await db()).brain.beads[TALON_ID];
+  assert.match(created.description, /^Talon AM\+decoder\+lexicon shown portable on Mac/);
+  assert.match(created.description, new RegExp(`task: ${TALON_TASK}`));
+  assert.match(created.title, /Porting Talon's speech engine to the iPhone/);
+  assert.ok(created.labels.includes(`fm-task:${TALON_TASK}`));
+}, { stores: STORES }));
+
+test('the status tail captures a scout when it records the done line; the hook delivering the same line afterwards writes nothing', async () => withStubs(async ({ env, db, writes }) => {
+  await stateDir(env);
+  await writeFile(statusFile(env, TALON_TASK), 'working [at=1792428879]: reading prior scout report\n');
+  await tail(env);
+  await report(env, TALON_TASK, TALON_REPORT);
+  await appendFile(statusFile(env, TALON_TASK), `done [at=1792432383]: ${TALON_LINE}\n`);
+  const tailed = await tail(env);
+  assert.deepEqual(tailed.recorded.map(r => [r.task, r.state, r.scout.target, r.scout.wrote, r.scout.links]),
+    [[TALON_TASK, 'done', TALON_ID, true, { fleet: 'linked' }]]);
+  let state = await db();
+  assert.match(state.brain.beads[TALON_ID].description, /^Talon AM\+decoder\+lexicon shown portable/);
+  const fleet = state.fleet.beads[`fleet-${TALON_TASK}`];
+  assert.ok(fleet.labels.includes('fm-state:done'));
+  assert.equal(fleet.comments.length, 2, 'the status comment and the capture link');
+  assert.match(fleet.comments[1].text, new RegExp(`findings captured in ${TALON_ID}`));
+
+  const before = (await writes()).length;
+  assert.deepEqual((await tail(env)).recorded, []);
+  const hook = await act(await scoutEvent(env, { task: TALON_TASK, report: TALON_REPORT, rawCommand: talonCommand(env.FM_HOME) }), env);
+  assert.equal(hook.target, TALON_ID);
+  assert.equal(hook.wrote, false);
+  assert.deepEqual(hook.links, { fleet: 'already' });
+  assert.equal((await writes()).length, before, 'the second path must not write');
+  state = await db();
+  assert.deepEqual(Object.keys(state.brain.beads), [TALON_ID]);
+  assert.equal(state.fleet.beads[`fleet-${TALON_TASK}`].comments.length, 2);
+}, { stores: STORES }));
+
+test('the hook capturing first leaves the status tail nothing to write for the same done line', async () => withStubs(async ({ env, db, writes }) => {
+  await stateDir(env);
+  await writeFile(statusFile(env, TALON_TASK), '');
+  await tail(env);
+  const hook = await act(await scoutEvent(env, { task: TALON_TASK, report: TALON_REPORT, rawCommand: talonCommand(env.FM_HOME) }), env);
+  assert.equal(hook.wrote, true);
+  assert.equal(hook.links.fleet, 'missing', 'the fleet bead does not exist yet');
+  await appendFile(statusFile(env, TALON_TASK), `done [at=1792432383]: ${TALON_LINE}\n`);
+  const tailed = await tail(env);
+  assert.equal(tailed.recorded[0].scout.wrote, false);
+  assert.equal(tailed.recorded[0].scout.links.fleet, 'linked', 'the fleet bead now exists, so the one link comment lands here');
+  const state = await db();
+  assert.deepEqual(Object.keys(state.brain.beads), [TALON_ID]);
+  assert.equal((await writes()).filter(w => w.store === 'brain' && w.argv[0] === 'create').length, 1);
+}, { stores: STORES }));
+
+test('a tailed done line for a task with no report is a visible skip, not a capture', async () => withStubs(async ({ env, db }) => {
+  await stateDir(env);
+  await writeFile(statusFile(env, 'ship-task'), '');
+  await tail(env);
+  await appendFile(statusFile(env, 'ship-task'), 'done [at=1792432383]: PR https://x/1\n');
+  const tailed = await tail(env);
+  assert.equal(tailed.recorded[0].state, 'done');
+  assert.match(tailed.recorded[0].scout.skipped, /not a scout/);
+  assert.equal((await db()).brain, undefined);
 }, { stores: STORES }));
