@@ -6,10 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { enqueueAction, runQueue, retryFailed } from '../src/queue.ts';
-import { execute } from '../src/worker.ts';
+import { execute, watchQueue } from '../src/worker.ts';
 import { healthStatus } from '../src/health.ts';
 import { deploy } from '../src/deploy.ts';
-import { writeHeartbeat } from '../src/heartbeat.ts';
+import { readHeartbeat, writeHeartbeat } from '../src/heartbeat.ts';
+import { workerStatus } from '../src/worker-status.ts';
 import { main as workerCli } from '../bin/fm-hooks-worker.ts';
 import { main as hooksCli } from '../bin/fm-hooks.ts';
 
@@ -96,6 +97,60 @@ test('FM_HOOK_MAX_ATTEMPTS=1 restores fail-on-first-error', async () => fixture(
   await enqueueAction(event, rule, action, root);
   const [result] = await runQueue({ root, execute: failing, env: { FM_HOOK_MAX_ATTEMPTS: '1' } });
   assert.equal(result.outcome, 'failed');
+}));
+
+// --- the production failure: an action that exits 1 while the store is down ----------
+
+// robots-vs2bv: hundreds of jobs, mostly fm-ledger-timeline, sat in failed/ with
+// "action exited 1" from store outages that cleared on their own. These drive that exact
+// shape through the real spawn path and the resident loop -- a fixed executable that
+// exits 1 while an outage marker exists -- rather than an injected throw.
+const outageAction = outage => ({ command: 'sh', args: ['-c', 'if [ -e "$1" ]; then exit 1; fi', 'sh', outage] });
+const fastRetry = maxAttempts => ({ ...process.env, FM_HOOK_MAX_ATTEMPTS: String(maxAttempts),
+  FM_HOOK_RETRY_BACKOFF_MS: '0', FM_HOOK_RETRY_MAX_BACKOFF_MS: '0' });
+
+test('an action that exits 1 during a store outage is retried by the resident worker and completes once the store is back', async () => fixture(async dir => {
+  const root = join(dir, 'q'), outage = join(dir, 'store-down');
+  await writeFile(outage, '');
+  await enqueueAction(event, rule, outageAction(outage), root);
+  const results = [];
+  const during = await watchQueue({ root, intervalMs: 5, beatMs: 0, maxCycles: 2, env: fastRetry(5),
+    onResult: result => results.push(result) });
+  assert.deepEqual(results.map(result => result.outcome), ['retry', 'retry']);
+  assert.equal(during.retried, 2);
+  assert.equal(during.failed, 0);
+  const waiting = await only(root, 'jobs');
+  assert.equal(waiting.attempts, 2);
+  assert.match(waiting.lastError, /action exited 1/);
+  assert.equal((await readdir(join(root, 'failed'))).length, 0, 'a transient failure must not land in failed/');
+  assert.equal((await readHeartbeat(root)).retried, 2);
+  assert.equal((await workerStatus({ root })).retried, 2, 'status shows a retrying worker, not an idle one');
+
+  await rm(outage);
+  const after = await watchQueue({ root, intervalMs: 5, beatMs: 0, maxCycles: 1, env: fastRetry(5),
+    onResult: result => results.push(result) });
+  assert.deepEqual(results.map(result => result.outcome), ['retry', 'retry', 'done']);
+  assert.equal(after.done, 1);
+  assert.equal((await readdir(join(root, 'jobs'))).filter(name => name.endsWith('.json')).length, 0);
+  assert.equal((await only(root, 'done')).attempts, 2, 'the done record keeps the attempts it took');
+}));
+
+test('an action that keeps exiting 1 reaches failed/ only after every attempt, with the count and the exit recorded', async () => fixture(async dir => {
+  const root = join(dir, 'q'), outage = join(dir, 'store-down');
+  await writeFile(outage, '');
+  await enqueueAction(event, rule, outageAction(outage), root);
+  const results = [];
+  const state = await watchQueue({ root, intervalMs: 5, beatMs: 0, maxCycles: 3, env: fastRetry(3),
+    onResult: result => results.push(result) });
+  assert.deepEqual(results.map(result => result.outcome), ['retry', 'retry', 'failed']);
+  assert.equal(state.retried, 2);
+  assert.equal(state.failed, 1);
+  assert.equal((await readdir(join(root, 'jobs'))).filter(name => name.endsWith('.json')).length, 0);
+  const lost = await only(root, 'failed');
+  assert.equal(lost.attempts, 3);
+  assert.match(lost.lastError, /action exited 1/);
+  const errors = (await readdir(join(root, 'failed'))).filter(name => name.endsWith('.error'));
+  assert.match(await readFile(join(root, 'failed', errors[0]), 'utf8'), /action exited 1/);
 }));
 
 // --- action timeout --------------------------------------------------------------
