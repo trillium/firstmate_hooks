@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { queueRoot } from './paths.ts';
@@ -29,18 +29,49 @@ export function pidAlive(pid) {
   catch (error) { return error.code === 'EPERM'; }
 }
 
+// A beat's temporary file is named after the process writing it, so a sweep can tell a
+// write in flight (the pid is alive) from litter (the pid is gone).
+const TEMPORARY = /^.+\.json\.(\d+)\.[^.]+\.tmp$/;
+
 export async function writeHeartbeat(root, beat, role = 'worker') {
   const path = heartbeatPath(root, role);
   await mkdir(dirname(path), { recursive: true });
   const record = { role, ...beat, pid: process.pid, updatedAt: new Date().toISOString() };
   // Written through a temporary file and renamed, so a reader never sees a half-written
-  // beat -- which would read as a dead worker rather than a busy one.
+  // beat -- which would read as a dead worker rather than a busy one. The temporary is
+  // removed on every way out of the write, so a failed write or rename leaves nothing
+  // behind; after a successful rename there is nothing to remove.
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  const file = await open(temporary, 'wx', 0o600);
-  try { await file.writeFile(`${JSON.stringify(record)}\n`); await file.sync(); }
-  finally { await file.close(); }
-  await rename(temporary, path);
+  try {
+    const file = await open(temporary, 'wx', 0o600);
+    try { await file.writeFile(`${JSON.stringify(record)}\n`); await file.sync(); }
+    finally { await file.close(); }
+    await rename(temporary, path);
+  } finally { await rm(temporary, { force: true }); }
+  await sweepHeartbeatTemporaries(root);
   return { path, record };
+}
+
+// A process killed between opening its temporary and renaming it -- launchd's SIGKILL,
+// a crash -- never reaches the removal above, and nothing else owned the file, so one
+// hard kill per restart grew the beat directory without bound. Every beat therefore
+// also sweeps that directory for temporaries whose writing process is gone. A temporary
+// whose pid is alive is a write in flight, this process's or another role's, and is left
+// alone; so is anything not of that shape, since the launchd logs share the directory.
+export async function sweepHeartbeatTemporaries(root = queueRoot()) {
+  const directory = dirname(heartbeatPath(root));
+  let names;
+  try { names = await readdir(directory); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const removed = [];
+  for (const name of names) {
+    const match = TEMPORARY.exec(name);
+    if (!match || pidAlive(Number(match[1]))) continue;
+    // Another role's beat may be sweeping the same file; losing that race is fine.
+    await rm(join(directory, name), { force: true });
+    removed.push(join(directory, name));
+  }
+  return removed;
 }
 
 export async function readHeartbeat(root = queueRoot(), role = 'worker') {
