@@ -38,6 +38,30 @@ test('matches direct semantic commands, quotes and command lists without matchin
   assert.deepEqual(parseSemanticCommand('notfm-send.sh x'), []);
 });
 
+// robots-znjpz: ships spawned through a `bash -c` wrapper produced no event at all, because
+// the command word was `bash`; the fm-spawn.sh call lived inside the quoted script.
+const WRAPPED_SPAWN_LOOP = "cd /Users/trilliumsmith/fm_home/firstmate && bash -c 'for t in parlay-launch-bead-q2 forefront-green-q2 forefront-config-auth-q2; do bin/fm-spawn.sh \"$t\" $FM_HOME/projects/forefront --harness claude --model claude-opus-5-5; done' 2>&1 | tail -3";
+
+test('a Firstmate call inside a bash -c script, including a loop body, is the harness call', () => {
+  const ops = command => parseSemanticCommand(command).map(x => [x.operation, x.args]);
+  assert.deepEqual(ops("bash -c 'bin/fm-spawn.sh task-1 /h/projects/demo'"), [['fm-spawn.sh', ['task-1', '/h/projects/demo']]]);
+  assert.deepEqual(ops(WRAPPED_SPAWN_LOOP), [['fm-spawn.sh', ['$t', '$FM_HOME/projects/forefront', '--harness', 'claude', '--model', 'claude-opus-5-5']]]);
+  assert.deepEqual(ops('sh -lc "fm-send.sh task-1 \'go now\'"'), [['fm-send.sh', ['task-1', 'go now']]]);
+  assert.deepEqual(ops("/bin/bash -o pipefail -c 'x | fm-spawn.sh t'"), [['fm-spawn.sh', ['t']]]);
+  assert.deepEqual(ops("bash -c \"bash -c 'fm-spawn.sh t'\""), [['fm-spawn.sh', ['t']]]);
+  assert.deepEqual(ops('if fm-spawn.sh t; then echo ok; fi'), [['fm-spawn.sh', ['t']]]);
+  assert.deepEqual(ops("bash -c 'echo fm-spawn.sh t'"), [], 'echoed text inside the script still does not match');
+  assert.deepEqual(ops("bash script.sh fm-spawn.sh t"), [], 'a script file argument is not a -c script');
+  assert.deepEqual(ops("bash -c"), []);
+  const events = normalizeEvent({ harness: 'claude-code', sessionId: 's', callId: 'c', rawCommand: WRAPPED_SPAWN_LOOP, outcome: 'success' });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].rawCommand, WRAPPED_SPAWN_LOOP, 'the queued raw command stays the harness call');
+  // The wrapper exits with the script's status, so a failure inside is decided like a direct call.
+  assert.deepEqual(failureOutcomes("bash -c 'fm-spawn.sh t'"), [['fm-spawn.sh', 'failure']]);
+  assert.deepEqual(failureOutcomes("bash -c 'fm-spawn.sh t; ls nope'"), [['fm-spawn.sh', 'unknown']]);
+  assert.deepEqual(failureOutcomes("bash -c 'fm-spawn.sh t' | tail -1"), [['fm-spawn.sh', 'unknown']]);
+});
+
 test('normalizes Claude/OpenCode-shaped fixtures to the same semantic context', () => {
   const common = { sessionId: 's1', callId: 'c1', rawCommand: "fm_dispatch 'task-1'", cwd: '/project', outcome: 'success' };
   const claude = normalizeEvent({ ...common, harness: 'claude-code', source: { eventName: 'PostToolUse' } })[0];
