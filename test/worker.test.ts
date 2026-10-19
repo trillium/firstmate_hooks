@@ -1,8 +1,9 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -102,6 +103,37 @@ test('status calls a running-but-silent worker dead', async () => fixture(async 
   assert.equal(status.alive, false, 'present but not progressing is not alive');
   assert.equal(status.ruleEvaluationLive, false, 'present but not progressing is not live');
   assert.match(status.reason, /not progressing/);
+}));
+
+// robots-yhvym: one queue's worker/ held eleven <role>.json.<pid>.<uuid>.tmp files from
+// five dead pids. A beat is written through a temporary and renamed, a process killed
+// between the two (launchd's SIGKILL, a crash) left the temporary, and nothing swept it.
+test('a beat whose rename fails leaves no temporary behind', async () => fixture(async root => {
+  // A directory where the beat file belongs makes the rename fail only after the
+  // temporary has been written and synced: the failure shape the write itself can hit.
+  await mkdir(heartbeatPath(root), { recursive: true });
+  await assert.rejects(writeHeartbeat(root, { cycles: 1 }), 'a beat cannot land on a directory');
+  assert.deepEqual(await readdir(join(root, 'worker')), ['worker.json'], 'only the obstacle remains, no temporary');
+}));
+
+test('a worker start sweeps the temporaries dead writers left and spares a live writer', async () => fixture(async root => {
+  const queue = join(root, 'queue');
+  const directory = join(queue, 'worker');
+  await mkdir(directory, { recursive: true });
+  // A real process that has already exited: its pid is gone the way a killed worker's is.
+  const dead = spawnSync('true').pid;
+  assert.ok(dead > 0 && !pidAlive(dead), 'the predecessor must be a real pid that is gone');
+  const litter = ['worker', 'supervisor', 'poller'].map(role => `${role}.json.${dead}.${randomUUID()}.tmp`);
+  // A temporary carrying a live pid is a write in flight, possibly another role's.
+  const inFlight = `supervisor.json.${process.pid}.${randomUUID()}.tmp`;
+  for (const name of [...litter, inFlight, 'launchd.out.log']) await writeFile(join(directory, name), '{}\n');
+  assert.equal((await readdir(directory)).length, 5, 'the litter is in place before the worker starts');
+
+  await watchQueue({ root: queue, intervalMs: 10, beatMs: 0, maxCycles: 1 });
+
+  assert.deepEqual((await readdir(directory)).sort(), [inFlight, 'launchd.out.log', 'worker.json'].sort(),
+    "dead writers' temporaries are gone; a live writer's temporary and unrelated files stay");
+  assert.equal((await readHeartbeat(queue)).pid, process.pid, 'and the beat itself landed');
 }));
 
 test('supervisor restarts a worker that exits and records the restarts', async () => {
