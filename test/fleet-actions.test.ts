@@ -4,6 +4,7 @@ import { mkdir, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runBeadAction } from '../src/bead-actions.ts';
 import { ensureFleetStore, forgetEnsuredStores, resolveTask } from '../src/fleet-beads.ts';
+import { normalizeEvent } from '../src/normalize.ts';
 import { withStubs } from '../testlib/stub-env.ts';
 
 let counter = 0;
@@ -78,6 +79,34 @@ test('a spawn whose task is a shell variable resolves from stdout, then from a m
   const skipped = await act(pi, 'fleet', env);
   assert.equal(skipped.skipped, 'unresolved');
   assert.ok(!(await fleet(db))['fleet-task-old']);
+}));
+
+// robots-znjpz: three ships spawned by one `bash -c` loop got no fleet bead. The hook now
+// parses the wrapped script (hooks.test.ts) and this end-to-end run takes the loop's single
+// fm-spawn.sh event, whose argv is `$t`, through to one bead per `spawned` line.
+test('a bash -c wrapped spawn loop records a fleet bead for every ship it dispatched', async () => withStubs(async ({ env, db }) => {
+  forgetEnsuredStores();
+  const ships = ['parlay-launch-bead-q2', 'forefront-green-q2', 'forefront-config-auth-q2'];
+  const rawCommand = `bash -c 'for t in ${ships.join(' ')}; do bin/fm-spawn.sh "$t" /h/projects/forefront --harness claude; done'`;
+  const [parsed] = normalizeEvent({ harness: 'claude-code', sessionId: 'abcdef123456', callId: 'c1', rawCommand, outcome: 'success',
+    resultMetadata: { stdout: ships.map(s => `spawned ${s} harness=claude model=opus\n`).join('') } });
+  assert.equal(parsed.operation, 'fm-spawn.sh');
+  for (const ship of ships) await meta(env, ship, 'project=/h/projects/forefront\nharness=claude\nmodel=opus\n');
+  const spawn = await recordEvent(env, { ...parsed, correlationId: 'f'.repeat(64) });
+  const first = await act(spawn, 'fleet', env);
+  assert.deepEqual(first.targets, ships.map(s => `fleet-${s}`));
+  assert.equal(first.wrote, true);
+  const beads = await fleet(db);
+  for (const ship of ships) {
+    const bead = beads[`fleet-${ship}`];
+    assert.ok(bead, `fleet-${ship} exists`);
+    assert.match(bead.comments.at(-1).text, new RegExp(`dispatched ${ship} on forefront harness=claude model=opus`));
+    assert.deepEqual(bead.labels.filter(l => l.startsWith('fm-state:')), ['fm-state:dispatched']);
+    assert.ok(bead.labels.includes('project:forefront'));
+  }
+  const again = await act(spawn, 'fleet', env);
+  assert.equal(again.wrote, false, 'a redelivered loop event writes no second comment on any ship');
+  assert.equal((await fleet(db))['fleet-forefront-green-q2'].comments.length, beads['fleet-forefront-green-q2'].comments.length);
 }));
 
 test('promote flips fm-kind, control exit stops, merge marks merged', async () => withStubs(async ({ env, db }) => {

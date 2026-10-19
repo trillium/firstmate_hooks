@@ -131,27 +131,37 @@ async function filesInWindow(dir, pick, event) {
   return hits;
 }
 
-// Order: argv literal, stdout success line, record written in the call window. Two records in the
-// window is ambiguous and resolves to nothing, never to a guess.
-export async function resolveTask(event, env, args = callArgs(event)) {
+// Order: argv literal, stdout success lines, record written in the call window. Two records in the
+// window is ambiguous and resolves to nothing, never to a guess. A spawn whose argv is a shell
+// variable may be a loop body (`for t in a b; do fm-spawn.sh "$t"; done`) that spawned several
+// tasks in one call: every `spawned <task>` line in stdout is one of them, in order.
+export async function resolveTasks(event, env, args = callArgs(event)) {
   const argv = args.find(a => !a.startsWith('-'));
-  if (argv && !argv.startsWith('$') && TASK_OK.test(argv)) return { task: argv, source: 'argv' };
+  if (argv && !argv.startsWith('$') && TASK_OK.test(argv)) return { tasks: [argv], source: 'argv' };
   const out = String(event.resultMetadata?.stdout ?? '');
   const pattern = STDOUT[event.operation];
-  const match = pattern && pattern.exec(out);
-  if (match && TASK_OK.test(match[1])) return { task: match[1], source: 'stdout' };
+  if (pattern) {
+    const lines = event.operation === 'fm-spawn.sh' ? [...out.matchAll(new RegExp(pattern.source, 'gm'))] : [pattern.exec(out)].filter(Boolean);
+    const tasks = [...new Set(lines.map(m => m[1]).filter(t => TASK_OK.test(t)))];
+    if (tasks.length) return { tasks, source: 'stdout' };
+  }
   const home = env.FM_HOME;
   if (home && event.operation === 'fm-spawn.sh') {
     const hits = await filesInWindow(join(home, 'state'), n => n.endsWith('.meta') && n.slice(0, -5), event);
-    if (hits.length === 1 && TASK_OK.test(hits[0])) return { task: hits[0], source: 'record' };
+    if (hits.length === 1 && TASK_OK.test(hits[0])) return { tasks: hits, source: 'record' };
   }
   if (home && event.operation === 'fm-brief.sh') {
     const hits = await filesInWindow(join(home, 'data'), n => n, event);
     const briefed = [];
     for (const name of hits) { try { await stat(join(home, 'data', name, 'brief.md')); briefed.push(name); } catch { /* none */ } }
-    if (briefed.length === 1 && TASK_OK.test(briefed[0])) return { task: briefed[0], source: 'record' };
+    if (briefed.length === 1 && TASK_OK.test(briefed[0])) return { tasks: briefed, source: 'record' };
   }
-  return { task: null, source: 'unresolved' };
+  return { tasks: [], source: 'unresolved' };
+}
+
+export async function resolveTask(event, env, args = callArgs(event)) {
+  const { tasks, source } = await resolveTasks(event, env, args);
+  return { task: tasks[0] ?? null, source };
 }
 
 async function briefIntent(task, env) {
@@ -188,7 +198,7 @@ async function steerRecord(target, event, env) {
 
 const MODE_FLAG = args => flagValue(args, '--mode');
 
-export async function describeFleetCall(event, env = process.env) {
+export async function describeFleetCall(event, env = process.env): Promise<Record<string, any> | null> {
   const args = callArgs(event);
   const op = event.operation;
   const first = args[0];
@@ -203,12 +213,22 @@ export async function describeFleetCall(event, env = process.env) {
       line: `briefed ${task} for ${repo ?? 'a charter'} (${kind}${mode ? `, mode ${mode}` : ''})` };
   }
   if (op === 'fm-spawn.sh') {
-    const { task, source } = await resolveTask(event, env, args);
-    const meta = task ? await readMeta(task, env, event) : {};
-    const project = args[1] && !args[1].startsWith('-') ? basename(args[1].replace(/\/+$/, '')) : (meta.project ? basename(meta.project) : null);
-    const parts = [meta.harness && `harness=${meta.harness}`, meta.model && `model=${meta.model}`, meta.backend && `backend=${meta.backend}`].filter(Boolean);
-    return { task, source, state: 'dispatched', project, retitle: true,
-      line: `dispatched ${task}${project ? ` on ${project}` : ''}${parts.length ? ` ${parts.join(' ')}` : ''}` };
+    // One call may have dispatched several tasks (a loop under `bash -c`); each gets its own
+    // description, and `more` carries the rest so fleetAction records every one of them.
+    const { tasks, source } = await resolveTasks(event, env, args);
+    const describe = async task => {
+      const meta = task ? await readMeta(task, env, event) : {};
+      // `$FM_HOME/projects/demo` still names demo; a bare `$p` names nothing and defers to meta.
+      const literal = args[1] && !args[1].startsWith('-') ? basename(args[1].replace(/\/+$/, '')) : null;
+      const project = literal && !literal.startsWith('$') ? literal : (meta.project ? basename(meta.project) : null);
+      const parts = [meta.harness && `harness=${meta.harness}`, meta.model && `model=${meta.model}`, meta.backend && `backend=${meta.backend}`].filter(Boolean);
+      return { task, source, state: 'dispatched', project, retitle: true,
+        line: `dispatched ${task}${project ? ` on ${project}` : ''}${parts.length ? ` ${parts.join(' ')}` : ''}` };
+    };
+    const first = await describe(tasks[0] ?? null);
+    const more = [];
+    for (const task of tasks.slice(1)) more.push(await describe(task));
+    return more.length ? { ...first, more } : first;
   }
   if (op === 'fm-control.sh') {
     const action = args.find((a, i) => i > 0 && !a.startsWith('-'));
@@ -266,6 +286,16 @@ export async function fleetAction(run, event, env = process.env) {
   const call = await describeFleetCall(event, env);
   if (!call) return { skipped: 'not a fleet lifecycle call' };
   if (!call.task) return { skipped: 'unresolved' };
+  const { more = [], ...first } = call;
+  const result = await recordFleetCall(run, event, env, first);
+  if (!more.length) return result;
+  // Several tasks from one call: every one is recorded; the result names them all.
+  const rest = [];
+  for (const other of more) rest.push(await recordFleetCall(run, event, env, other));
+  return { ...result, targets: [result.target, ...rest.map(r => r.target)], wrote: [result, ...rest].some(r => r.wrote) };
+}
+
+async function recordFleetCall(run, event, env, call): Promise<Record<string, any>> {
   const meta = await metaFields(call.task, env, event);
   if (call.project) meta.project = call.project;
   const store = FLEET_STORE(env);

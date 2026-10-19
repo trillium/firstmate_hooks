@@ -65,6 +65,29 @@ function shellWords(text) {
 // A Firstmate call is identified by its command basename, not by a name list.
 export const FIRSTMATE_CALL = /^fm[-_][A-Za-z0-9_.-]+$/;
 
+// Words that may precede a command inside a compound: the body of a `for`/`while` loop or an
+// `if` branch is still a command at a segment start (`do bin/fm-spawn.sh "$t"`), and a
+// brace group opens with `{`. `!` is left out: it inverts the status the exit rule reads.
+const COMPOUND_LEAD = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '{']);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const SHELL = /^(?:ba|da|k|z)?sh$/;
+
+// `bash -c '<script>'` (also sh, dash, ksh, zsh; `-c` may sit in a flag cluster such as
+// `-lc` or `-ec`) runs the script, so the script's Firstmate calls are this call's. The
+// script is the first operand after `-c`, which shellWords has already unquoted one level.
+function wrappedScript(words) {
+  if (!SHELL.test(words[0].split('/').at(-1))) return null;
+  let seen = false;
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i];
+    if (word === '--') continue;
+    if (word === '-o' || word === '+o') { i++; continue; }
+    if (/^[-+][A-Za-z]+$/.test(word)) { if (word.startsWith('-') && word.includes('c')) seen = true; continue; }
+    return seen ? word : null;
+  }
+  return null;
+}
+
 export function parseSemanticCommand(rawCommand) {
   if (typeof rawCommand !== 'string' || !rawCommand.trim()) return [];
   const found = [];
@@ -72,11 +95,21 @@ export function parseSemanticCommand(rawCommand) {
   for (const [unitIndex, unit] of units.entries()) {
     const words = shellWords(unit.text.trim());
     if (!words.length || words[0].startsWith('#')) continue;
-    // Permit ordinary variable assignments before a command; do not expand them.
+    // Permit compound-command leads and ordinary variable assignments before a command;
+    // do not expand the assignments.
     let index = 0;
-    while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])) index++;
+    while (index < words.length && (COMPOUND_LEAD.has(words[index]) || ASSIGNMENT.test(words[index]))) index++;
     const command = words[index];
     if (!command) continue;
+    const script = wrappedScript(words.slice(index));
+    if (script !== null) {
+      // The wrapper exits with the script's last status, so a nested call decided the
+      // harness call's status only when it decided the script's and the wrapper decided
+      // the call's. The raw command stays the harness call, which is what the queue keys on.
+      const decided = decidesExit(units, unitIndex);
+      for (const inner of parseSemanticCommand(script)) found.push({ ...inner, rawCommand, decidesExit: inner.decidesExit && decided });
+      continue;
+    }
     const operation = command.split('/').at(-1);
     if (!FIRSTMATE_CALL.test(operation)) continue;
     found.push({ operation, args: words.slice(index + 1), rawCommand, decidesExit: decidesExit(units, unitIndex) });
