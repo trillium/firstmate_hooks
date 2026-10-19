@@ -74,6 +74,7 @@ test('normalizes Claude/OpenCode-shaped fixtures to the same semantic context', 
 const SPAWN_PIPELINE = "export FM_HOME=/Users/trilliumsmith/fm_home/macbook-ops; B=$FM_HOME/bin; D=/Users/trilliumsmith/fm_home/firstmate/state/macbook-ops.inbox\n$B/fm-spawn.sh coder-playground-review $FM_HOME/projects/brain-playground --scout --harness claude --model claude-sonnet-5-5 --effort medium 2>&1|grep -v '^\u25cf'|tail -1\n$B/fm-secondmate-report.sh working 104ada1ce158ca8a \"Coder playground review (runbooks-opn steps 2, 4, 6) dispatched to scout coder-playground-review; per-step pass/fail with evidence paths to follow.\" 2>&1|tail -1\nmv $D/194.msg $D/handled/";
 const LEDGER_GUARDED = "S=/Users/trilliumsmith/fm_home/macbook-ops/state/egress-allowlist.status; echo \"paused [at=$(date +%s)]: verify-requirements --only T,R3 rerun on fresh workspace (run4) in progress; resumes when it finishes\" >> $S && { [ ! -e '/Users/trilliumsmith/fm_home/macbook-ops/config/fleet-ledger' ] || '/Users/trilliumsmith/fm_home/macbook-ops/bin/fm-fleet-ledger.sh' appended '/Users/trilliumsmith/fm_home/macbook-ops/config' $S >/dev/null 2>&1 || true; }; ls /Users/trilliumsmith/fm_home/macbook-ops/state/egress-allowlist.inbox/*.msg 2>/dev/null";
 const LEDGER_CHAIN_REFUSED = "cd /repo && git add -A && git commit -q -m 'feat: x' && git status --short && echo \"working [at=$(date +%s)]: done\" >> $S && { [ ! -e '/fh/config/fleet-ledger' ] || '/fh/bin/fm-fleet-ledger.sh' appended '/fh/config' $S >/dev/null 2>&1 || true; }";
+const STATUS = '/fh/state/x.status';
 const failureOutcomes = (rawCommand, outcome = 'failure') =>
   normalizeEvent({ harness: 'claude-code', sessionId: 's', callId: 'c', rawCommand, outcome }).map(e => [e.operation, e.outcome]);
 
@@ -113,8 +114,13 @@ test('the fm-spawn and fm-fleet-ledger failure rules fire only on a decisive fai
   // Event a934f44e…: a `git add -A` refused by a guard failed the chain before the `||`-guarded
   // ledger call ran; the ledger rule must not blame an invocation that never executed.
   assert.deepEqual(fired(LEDGER_CHAIN_REFUSED), []);
+  // The same refusal with the ledger call unguarded and behind `&&`: it never ran, so it is not blamed.
+  assert.deepEqual(fired(`cd /repo && git add -A && echo "working [at=1]: done" >> ${STATUS} && fm-fleet-ledger.sh appended /fh/config ${STATUS}`), []);
   assert.deepEqual(fired('fm-spawn.sh task-1 --scout'), ['fm-spawn-failure']);
   assert.deepEqual(fired('fm-fleet-ledger.sh appended /cfg /status'), ['fm-fleet-ledger-failure']);
+  // The ledger ran after a `;` or as the `||` fallback, so its own status is the call's status.
+  assert.deepEqual(fired('make x; fm-fleet-ledger.sh appended /cfg /status'), ['fm-fleet-ledger-failure']);
+  assert.deepEqual(fired('git add -A || fm-fleet-ledger.sh appended /cfg /status'), ['fm-fleet-ledger-failure']);
 });
 
 test('OpenCode result inference retains unknown and does not infer from empty output', () => {

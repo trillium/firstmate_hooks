@@ -107,12 +107,13 @@ export function parseSemanticCommand(rawCommand) {
       // harness call's status only when it decided the script's and the wrapper decided
       // the call's. The raw command stays the harness call, which is what the queue keys on.
       const decided = decidesExit(units, unitIndex);
-      for (const inner of parseSemanticCommand(script)) found.push({ ...inner, rawCommand, decidesExit: inner.decidesExit && decided });
+      const afterAnd = units[unitIndex - 1]?.op === '&&';
+      for (const inner of parseSemanticCommand(script)) found.push({ ...inner, rawCommand, decidesExit: inner.decidesExit && decided, afterAnd: inner.afterAnd || afterAnd });
       continue;
     }
     const operation = command.split('/').at(-1);
     if (!FIRSTMATE_CALL.test(operation)) continue;
-    found.push({ operation, args: words.slice(index + 1), rawCommand, decidesExit: decidesExit(units, unitIndex) });
+    found.push({ operation, args: words.slice(index + 1), rawCommand, decidesExit: decidesExit(units, unitIndex), afterAnd: units[unitIndex - 1]?.op === '&&' });
   }
   return found;
 }
@@ -129,7 +130,7 @@ export function correlationId({ harness, sessionId, callId, rawCommand, timestam
 export function normalizeEvent(input) {
   const semantic = parseSemanticCommand(input.rawCommand);
   if (!semantic.length) return [];
-  return semantic.map(({ operation, args, rawCommand, decidesExit }) => ({
+  return semantic.map(({ operation, args, rawCommand, decidesExit, afterAnd }) => ({
     operation,
     args,
     rawCommand,
@@ -140,7 +141,9 @@ export function normalizeEvent(input) {
     callId: input.callId ?? null,
     correlationId: correlationId({ ...input, rawCommand }),
     // A failed call is only a failure of this invocation when its status was the call's status.
-    outcome: input.outcome === 'failure' && !decidesExit ? 'unknown' : input.outcome ?? 'unknown',
+    // A ledger call behind `&&` is not demonstrably the one that failed: an earlier step that
+    // refused the chain leaves the same exit status and the ledger never ran.
+    outcome: input.outcome === 'failure' && (!decidesExit || (afterAnd && operation === 'fm-fleet-ledger.sh')) ? 'unknown' : input.outcome ?? 'unknown',
     exitCode: Number.isInteger(input.exitCode) ? input.exitCode : null,
     startedAt: input.startedAt ?? null,
     finishedAt: input.finishedAt ?? new Date().toISOString(),
