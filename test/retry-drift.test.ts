@@ -1,15 +1,16 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { enqueueAction, runQueue, retryFailed } from '../src/queue.ts';
 import { execute, watchQueue } from '../src/worker.ts';
 import { healthStatus } from '../src/health.ts';
 import { deploy } from '../src/deploy.ts';
-import { readHeartbeat, writeHeartbeat } from '../src/heartbeat.ts';
+import { pidAlive, readHeartbeat, writeHeartbeat } from '../src/heartbeat.ts';
 import { workerStatus } from '../src/worker-status.ts';
 import { main as workerCli } from '../bin/fm-hooks-worker.ts';
 import { main as hooksCli } from '../bin/fm-hooks.ts';
@@ -306,6 +307,23 @@ test('deploy installs rules to both locations, the task-card, and the bead-actio
   assert.ok((await lstat(join(deployDir, 'fm-hooks-bead-action'))).isSymbolicLink());
   assert.equal(await readlink(join(deployDir, 'fm-hooks-bead-action')), join(REPO, 'bin', 'fm-hooks-bead-action.ts'));
   assert.equal(result.changed.length, 2);
+}));
+
+// robots-59gm1: the install wrote a temporary beside each rules file and renamed it; a deploy
+// killed between the two left the temporary there for good. The temporary now carries the
+// writer's pid, and a deploy removes those whose writer is gone.
+test('deploy sweeps the rules temporaries a killed deploy left beside both targets and spares a live writer', async () => fixture(async dir => {
+  const { deployDir, homeRules, run } = await deployFixture(dir);
+  await mkdir(deployDir, { recursive: true }); await mkdir(dirname(homeRules), { recursive: true });
+  const dead = spawnSync('true').pid;
+  assert.ok(dead > 0 && !pidAlive(dead), 'the predecessor must be a real pid that is gone');
+  const litter = [deployDir, dirname(homeRules)].map(d => join(d, `fm-hooks.rules.json.${dead}.${randomUUID()}.tmp`));
+  const inFlight = join(deployDir, `fm-hooks.rules.json.${process.pid}.${randomUUID()}.tmp`);
+  for (const path of [...litter, inFlight]) await writeFile(path, '');
+  await run();
+  for (const path of litter) await assert.rejects(stat(path), `${path} is a dead deploy's and is gone`);
+  await stat(inFlight);
+  assert.equal(await readFile(homeRules, 'utf8'), await readFile(join(REPO, 'config', 'fm-hooks.rules.json'), 'utf8'), 'and the rules landed');
 }));
 
 test('deploy prints the diff against the live rules before replacing them, and is a no-op the second time', async () => fixture(async dir => {

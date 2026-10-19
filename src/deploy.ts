@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { chmod, copyFile, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { replaceRaw } from './atomic.ts';
 import { CHECKOUT, cloneDrift } from './drift.ts';
 import { stateRoot } from './paths.ts';
 
@@ -24,14 +25,11 @@ export async function unifiedDiff(oldText, newText, label) {
   } finally { await rm(`${scratch}.old`, { force: true }); await rm(`${scratch}.new`, { force: true }); }
 }
 
-// Write through a temporary file and rename, so a worker reading the rules during a
-// deploy sees the old file or the new one, never half of it.
-async function install(path, text, mode) {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, text, { mode });
-  await chmod(temporary, mode);
-  await rename(temporary, path);
-}
+// Written through a temporary file and renamed, so a worker reading the rules during a
+// deploy sees the old file or the new one, never half of it. The temporary is removed on
+// a failed write, and the write sweeps the temporaries a deploy killed between writing
+// and renaming left beside the target (atomic.ts).
+const install = (path, text, mode) => replaceRaw(path, text, { mode });
 
 export async function deploy({ checkout = CHECKOUT, env = process.env, deployDir = stateRoot(env),
   homeRules = join(env.FM_HOME || join(homedir(), 'fm_home', 'firstmate'), 'fm-hooks.rules.json'),
