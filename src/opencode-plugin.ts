@@ -1,12 +1,25 @@
 import { parseSemanticCommand, explicitOpenCodeOutcome } from './normalize.ts';
 import { observe } from './observer.ts';
 import { appendEventLog } from './queue.ts';
+import { createTurnTracker, recordTurnEnd } from './turn-end.ts';
 
 // OpenCode plugin contract: tool.execute.before / tool.execute.after.
 // Never mutate input or output; unsupported/ambiguous result metadata stays unknown.
 export default async function fmHooksPlugin({ directory, worktree }: { directory?: string; worktree?: string }) {
   const starts = new Map();
+  // Every tool call of the turn is counted, not only the shell ones, so the turn-end record
+  // can say how much work the turn did. The count never reads or changes a call's data.
+  const turns = createTurnTracker('opencode');
   return {
+    event: async ({ event }) => {
+      if (event?.type !== 'session.idle') return;
+      try {
+        const record = turns.settle(event.properties?.sessionID);
+        if (record) await recordTurnEnd(record);
+      } catch (error) {
+        console.error(`fm-hooks observer error: ${error.message}`);
+      }
+    },
     'tool.execute.before': async (input, output) => {
       if (input.tool !== 'bash' && input.tool !== 'shell') return;
       const command = output.args?.command;
@@ -14,6 +27,7 @@ export default async function fmHooksPlugin({ directory, worktree }: { directory
       starts.set(input.callID, { startedAt: new Date().toISOString(), command });
     },
     'tool.execute.after': async (input, output) => {
+      turns.toolCall(input.sessionID, input.callID, input.tool === 'bash' || input.tool === 'shell' ? input.args?.command ?? output.args?.command : undefined);
       if (input.tool !== 'bash' && input.tool !== 'shell') return;
       const command = input.args?.command ?? output.args?.command;
       if (typeof command !== 'string') return;

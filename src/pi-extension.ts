@@ -1,13 +1,19 @@
 import { parseSemanticCommand } from './normalize.ts';
 import { observe } from './observer.ts';
 import { appendEventLog } from './queue.ts';
+import { createTurnTracker, recordTurnEnd } from './turn-end.ts';
 
 // Observe only completed Pi bash calls. Keep just enough start data to pair the
 // completion event; the adapter never patches or replaces Pi tool data.
 export default function fmHooksPiExtension(pi) {
   const starts = new Map();
+  const turns = createTurnTracker('pi');
 
   pi.on('tool_execution_start', (event, ctx) => {
+    // Count every tool of the turn for the turn-end record; the call itself is never touched.
+    try {
+      turns.toolCall(ctx.sessionManager.getSessionId(), event.toolCallId, event.toolName === 'bash' ? event.args?.command : undefined);
+    } catch { /* counting is best effort */ }
     if (event.toolName !== 'bash' || typeof event.args?.command !== 'string') return;
 
     starts.set(event.toolCallId, {
@@ -63,6 +69,16 @@ export default function fmHooksPiExtension(pi) {
       });
     } catch (error) {
       // Observation failures must never affect Pi's completed tool call.
+      console.error(`fm-hooks observer error: ${error.message}`);
+    }
+  });
+
+  // Pi's turn boundary: the agent has settled and has nothing left to do.
+  pi.on('agent_settled', async (_event, ctx) => {
+    try {
+      const record = turns.settle(ctx?.sessionManager?.getSessionId());
+      if (record) await recordTurnEnd(record);
+    } catch (error) {
       console.error(`fm-hooks observer error: ${error.message}`);
     }
   });

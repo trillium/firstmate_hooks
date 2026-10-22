@@ -99,7 +99,9 @@ Add these hooks to the applicable Claude settings file; merge with existing hook
 }
 ```
 
-The adapter observes only Bash and only post-success/post-failure. Claude's Bash input is a shell command string, not argv; args in normalized events are a conservative tokenization and `rawCommand` is authoritative. If the lifecycle event does not supply a call ID, the deterministic fallback key collapses identical commands in the same session.
+To record turn ends, also register the same command for `Stop` (no matcher): `"Stop": [{"hooks": [{"type": "command", "command": "<the same command>"}]}]`. A `Stop` delivery is the only non-Bash event the adapter reads, and it only writes a [`turn-end`](#turn-end) record.
+
+The adapter observes Bash only for post-success/post-failure. Claude's Bash input is a shell command string, not argv; args in normalized events are a conservative tokenization and `rawCommand` is authoritative. If the lifecycle event does not supply a call ID, the deterministic fallback key collapses identical commands in the same session.
 
 ### OpenCode
 
@@ -219,6 +221,18 @@ On a successful `fm-wake-drain.sh` call that is not an acknowledgement (no `--ac
 - `openDecisions`: the `OPEN DECISIONS` lines of the drain's output. They are folded from the status logs by the drain itself, so a piped drain that lost them records `[]` with `openDecisionsSource: "unavailable"`.
 
 The record is derived data and best effort: a missing, unreadable or racing store yields a record with the fields that could be read, and a failure to write it is logged to stderr and never fails the observation of the drain. A repeated delivery keeps the first file and appends to the log again, like an event.
+
+### `turn-end`
+
+The boundary that closes a handling turn, written to `<queue>/turn-end/<turnId>.json` and `events.jsonl`:
+
+```json
+{"type":"turn-end","harness":"claude-code","sessionId":"…","turnId":"<sha256 of session + transcript size>","finishedAt":"…",
+ "drainCallIds":["toolu_…"],"toolCallCount":6,"lastAssistantMessage":"<first 400 chars, scrubbed>","transcriptPath":"~/.claude/projects/…/<session>.jsonl","stopHookActive":false}
+```
+
+- **Claude Code** records it from the `Stop` hook (register `claude-hook.ts` for `Stop`, see [Claude Code](#claude-code)). The hook prints nothing and exits 0, so it neither blocks the stop nor continues the turn, whatever else is registered for `Stop`. `turnId` hashes the session and the transcript's byte size at the stop, so a replayed delivery of the same stop is the same turn. `drainCallIds` are the `tool_use` ids of the `fm-wake-drain.sh` Bash calls (drains and acknowledgements) after the last prompt, in order, and `toolCallCount` counts every tool call after it, sub-agents' own excluded; both come from the tail (last 4 MiB) of the transcript, which is only read. `lastAssistantMessage` is the payload's `last_assistant_message`, else the last assistant text of the turn. `transcriptPath` keeps the join key with the home directory written as `~`: expand it with the same machine's home.
+- **OpenCode** records it on the `session.idle` event, **Pi** on `agent_settled`. Neither exposes a transcript the observer may read, so the adapter counts the turn's tool calls as they complete: `drainCallIds` and `toolCallCount` are filled, `lastAssistantMessage` and `transcriptPath` are `null`, and `turnId` hashes the session, the adapter's start time and the turn's ordinal.
 
 ## Validation
 
