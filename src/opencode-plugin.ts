@@ -15,7 +15,7 @@ export default async function fmHooksPlugin({ directory, worktree }: { directory
       if (event?.type !== 'session.idle') return;
       try {
         const record = turns.settle(event.properties?.sessionID);
-        if (record) await recordTurnEnd(record);
+        if (record) await recordTurnEnd(record, undefined, { cwd: directory ?? worktree });
       } catch (error) {
         console.error(`fm-hooks observer error: ${error.message}`);
       }
@@ -34,7 +34,7 @@ export default async function fmHooksPlugin({ directory, worktree }: { directory
       if (!parseSemanticCommand(command).length) {
         try {
           await appendEventLog({ type: 'seen', matched: false, harness: 'opencode', tool: input.tool,
-            callId: input.callID, rawCommand: command });
+            callId: input.callID, rawCommand: command }, undefined, { cwd: directory ?? worktree });
         } catch (error) {
           console.error(`fm-hooks observer error: ${error.message}`);
         }

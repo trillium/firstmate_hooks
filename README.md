@@ -193,6 +193,17 @@ Compatibility verification covers OpenCode command discovery (`opencode debug co
 
 Each recognized event contains `operation`, tokenized `args`, exact `rawCommand`, `cwd`, optional `project`, `harness`, `sessionId`, `callId`, deterministic `correlationId`, `outcome` (`success`, `failure`, or `unknown`), optional `exitCode`, start/finish timestamps, duration when available, result metadata, and adapter source. Unknown is distinct and cannot satisfy success-only rules. Claude success/failure lifecycle event names provide the outcome class; a numeric exit code is retained only if present. OpenCode reports success/failure only for explicit metadata as above.
 
+### Order and origin
+
+Every record fm-hooks writes (an `event`, `seen`, `worker`, `wake-drain` or `turn-end` line in `events.jsonl`, and the write-once file behind it) carries four more fields, so a consumer no longer orders by millisecond `finishedAt` or guesses the home from `cwd`:
+
+| Field | Meaning |
+|---|---|
+| `seq` | A per-queue counter that only goes up, allocated under a lock in `<queue>/seq/` so concurrent hook processes never share one. It continues across `events.jsonl` rotation. An event's file keeps the `seq` of its first observation; every repeated delivery logs a `seq` of its own. `null` when the lock could not be taken within `FM_HOOK_SEQ_LOCK_TIMEOUT_MS` (default 2000): the record is written unordered rather than lost or held behind a stuck owner. A counter that cannot be read restarts from the clock in milliseconds, above any earlier count. |
+| `fmHome` | The Firstmate home the record belongs to, with the user's home directory written as `~`: `FM_HOME` when the harness passes it through, else the `.../fm_home/<name>` directory of the call's working directory, else one the command names (`H=/…/fm_home/x; $H/bin/…`); `null` when none resolves. |
+| `machine` | `FM_HOOK_MACHINE` when set (set it per machine in the hook command, for example `mini0` or `macbook`), else the short lower-case host name. |
+| `schemaVersion` | `2`. A record without the field was written before these fields existed (version 1). |
+
 A call is a Firstmate call when its command basename matches `/^fm[-_][A-Za-z0-9_.-]+$/`. That covers `fm-spawn.sh`, `bin/fm-send.sh`, and `fm_dispatch` alike. It is not a list of approved names. The command word must be the call itself, optionally after a path, preceding environment assignments, or a compound-command lead (`do`, `then`, `if`, `while`, `{`), at a shell command-list segment start. A script passed to `bash -c` (or `sh`/`dash`/`ksh`/`zsh -c`, including flag clusters such as `-lc`) is parsed by the same rules one quoting level down, so `bash -c 'for t in a b; do fm-spawn.sh "$t"; done'` is a call to `fm-spawn.sh`; a spawn loop that prints several `spawned <task>` lines records every task. Echoed text, comments, substrings, and names that merely contain `fm` do not match. This is not a shell parser; heredocs, command substitution, functions, aliases, interactive shells, scripts running outside harness tool events, and non-Bash tools are unsupported. Aliases and shell-resolved names are not recognized. A rule with `"operation": "*"` runs after any recognized Firstmate call whose outcome matches. A named operation still matches only that call.
 
 ## Wake records

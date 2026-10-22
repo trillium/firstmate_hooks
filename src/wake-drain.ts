@@ -134,7 +134,7 @@ export function isPresentingDrain(event): boolean {
 
 export async function buildWakeDrain(event, { env = process.env, now = Math.floor(Date.now() / 1000) }: Record<string, any> = {}) {
   const output = parseDrainOutput(outputOf(event));
-  const fmHome = resolveFmHome(env, event.cwd);
+  const fmHome = resolveFmHome(env, event.cwd, event.rawCommand);
   const state = fmHome ? stateDirOf(fmHome) : null;
 
   let rows: any[] = [], rowsSource = 'unavailable', claimed: number | null = null, generation: string | null = null;

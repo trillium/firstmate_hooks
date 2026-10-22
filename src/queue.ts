@@ -2,7 +2,9 @@ import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promis
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeOnce } from './atomic.ts';
+import { claimLock } from './lock.ts';
 import { ensureQueue } from './migrate.ts';
+import { stampRecord } from './origin.ts';
 import { defaultRulesPaths, eventLogPolicy, queueRoot, retryPolicy } from './paths.ts';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -36,13 +38,18 @@ async function rotateEventLog(path, { maxBytes, keep }) {
   }
 }
 
-export async function appendEventLog(record, root = queueRoot()) {
+// `hint` is where the record came from when the record itself does not say (a working
+// directory, a command): it only helps resolve the Firstmate home and is never written.
+export async function appendEventLog(record, root = queueRoot(), hint: Record<string, any> = {}) {
   await ensureQueue(root);
   const path = join(root, 'events.jsonl');
   await rotateEventLog(path, eventLogPolicy());
+  // Order and origin are stamped here, once, for every record the observer or the worker
+  // logs. A record that was already stamped (persistEvent, persistRecord) keeps its seq.
+  const stamped = await stampRecord(record, root, hint);
   const file = await open(path, 'a', 0o600);
   try {
-    await file.writeFile(`${JSON.stringify({ ...record, loggedAt: new Date().toISOString() })}\n`);
+    await file.writeFile(`${JSON.stringify({ ...stamped, loggedAt: new Date().toISOString() })}\n`);
     await file.sync();
   } finally { await file.close(); }
   return path;
@@ -53,10 +60,12 @@ export async function persistEvent(event, root = queueRoot()) {
   const events = join(root, 'events');
   await mkdir(events, { recursive: true });
   const path = join(events, `${event.correlationId}-${safe(event.operation)}.json`);
-  // Same call ID may be observed repeatedly. Preserve the original durable record.
-  await writeOnce(path, event);
+  // Same call ID may be observed repeatedly. Preserve the original durable record: the file
+  // keeps the seq of the first observation, and each repeat logs a seq of its own.
+  const stamped = await stampRecord(event, root);
+  await writeOnce(path, stamped);
   // The JSONL log appends every observation, including repeats, so a tail proves the hook is live.
-  await appendEventLog({ type: 'event', ...event }, root);
+  await appendEventLog({ type: 'event', ...stamped }, root);
   return path;
 }
 
@@ -64,13 +73,14 @@ export async function persistEvent(event, root = queueRoot()) {
 // write-once under its own directory, never in events/, so a consumer that reads every
 // events/*.json for normalized calls sees exactly the files it always did. The log line is
 // appended on every delivery, like an event's, and carries the record's own `type`.
-export async function persistRecord(kind, id, record, root = queueRoot()) {
+export async function persistRecord(kind, id, record, root = queueRoot(), hint: Record<string, any> = {}) {
   await ensureQueue(root);
   const directory = join(root, kind);
   await mkdir(directory, { recursive: true });
   const path = join(directory, `${safe(id)}.json`);
-  await writeOnce(path, record);
-  await appendEventLog(record, root);
+  const stamped = await stampRecord(record, root, hint);
+  await writeOnce(path, stamped);
+  await appendEventLog(stamped, root);
   return path;
 }
 
@@ -113,34 +123,6 @@ export async function loadRules(paths = defaultRulesPaths()) {
   return [];
 }
 
-// Standalone worker: queued actions execute outside the latency-sensitive hook.
-// A crash around an external side effect is at-least-once; actions must be idempotent.
-async function claimLock(path) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const lock = await open(path, 'wx', 0o600);
-      await lock.writeFile(`${process.pid}\n`);
-      await lock.sync();
-      return lock;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      let pid;
-      try { pid = Number((await readFile(path, 'utf8')).trim()); }
-      catch (readError) { if (readError.code === 'ENOENT') continue; throw readError; }
-      if (Number.isInteger(pid) && pid > 0) {
-        try { process.kill(pid, 0); return null; }
-        catch (killError) { if (killError.code !== 'ESRCH') return null; }
-      }
-      // Reclaim a dead worker's lock via atomic rename so concurrent workers cannot
-      // remove a newly acquired lock at the original path.
-      const stale = `${path}.${randomUUID()}.stale`;
-      try { await rename(path, stale); await rm(stale, { force: true }); }
-      catch (renameError) { if (renameError.code !== 'ENOENT') throw renameError; }
-    }
-  }
-  return null;
-}
-
 // A failed action is retried, not dropped: the failures seen in production were store
 // outages that clear on their own, and a job moved to failed/ on the first one was lost
 // for good. The job stays in jobs/ with an `attempts` count and a `notBefore` time, and
@@ -157,6 +139,8 @@ async function rewriteJob(path, job) {
   try { await rename(temporary, path); } catch (error) { await rm(temporary, { force: true }); throw error; }
 }
 
+// Standalone worker: queued actions execute outside the latency-sensitive hook.
+// A crash around an external side effect is at-least-once; actions must be idempotent.
 export async function runQueue({ root = queueRoot(), execute, env = process.env, now = Date.now(),
   ...overrides }: Record<string, any> = {}) {
   const policy = { ...retryPolicy(env), ...overrides };

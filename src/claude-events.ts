@@ -14,7 +14,7 @@ export async function handleClaudeHook(event, { eventName = event?.hook_event_na
   if (typeof command !== 'string') return;
   if (!parseSemanticCommand(command).length) {
     await appendEventLog({ type: 'seen', matched: false, harness: 'claude-code', tool, rawCommand: command,
-      sessionId: event.session_id ?? null, callId: event.tool_use_id ?? null }, root);
+      sessionId: event.session_id ?? null, callId: event.tool_use_id ?? null }, root, { cwd: event.cwd, rawCommand: command });
     return;
   }
   const finishedAt = new Date().toISOString();

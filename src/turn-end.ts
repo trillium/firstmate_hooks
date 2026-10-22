@@ -95,7 +95,7 @@ export function buildTurnEnd({ harness, sessionId, turnId, finishedAt = new Date
   };
 }
 
-export const recordTurnEnd = (record, root?: string) => persistRecord('turn-end', record.turnId, record, root);
+export const recordTurnEnd = (record, root?: string, hint: Record<string, any> = {}) => persistRecord('turn-end', record.turnId, record, root, hint);
 
 // Claude: the turn's position is the transcript's size when the Stop hook runs.
 export async function turnEndFromClaudeStop(payload, root?: string) {
@@ -106,7 +106,7 @@ export async function turnEndFromClaudeStop(payload, root?: string) {
     drainCallIds: turn.drainCallIds, toolCallCount: turn.toolCallCount,
     lastAssistantMessage: typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : turn.lastAssistantText,
     transcriptPath: payload.transcript_path, stopHookActive: typeof payload.stop_hook_active === 'boolean' ? payload.stop_hook_active : null });
-  await recordTurnEnd(record, root);
+  await recordTurnEnd(record, root, { cwd: payload.cwd });
   return record;
 }
 

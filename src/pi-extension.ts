@@ -39,7 +39,7 @@ export default function fmHooksPiExtension(pi) {
           tool: event.toolName,
           callId: event.toolCallId,
           rawCommand: start.rawCommand
-        });
+        }, undefined, { cwd: start.cwd });
       } catch (error) {
         console.error(`fm-hooks observer error: ${error.message}`);
       }
@@ -77,7 +77,7 @@ export default function fmHooksPiExtension(pi) {
   pi.on('agent_settled', async (_event, ctx) => {
     try {
       const record = turns.settle(ctx?.sessionManager?.getSessionId());
-      if (record) await recordTurnEnd(record);
+      if (record) await recordTurnEnd(record, undefined, { cwd: ctx?.cwd });
     } catch (error) {
       console.error(`fm-hooks observer error: ${error.message}`);
     }

@@ -22,7 +22,7 @@ export async function observe(input, options: Record<string, any> = {}) {
 async function recordWakeDrain(event, root, options) {
   try {
     const record = await buildWakeDrain(event, { env: options.env ?? process.env, now: options.now });
-    await persistRecord('wake-drain', event.correlationId, record, root);
+    await persistRecord('wake-drain', event.correlationId, record, root, { env: options.env, cwd: event.cwd, rawCommand: event.rawCommand });
   } catch (error) {
     console.error(`fm-hooks observer error: wake-drain: ${error.message}`);
   }

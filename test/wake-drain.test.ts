@@ -165,6 +165,13 @@ test('no wake-drain record for an acknowledgement, a failed or unknown drain, or
   assert.equal((await readdir(join(queue, 'events'))).length, 4, 'every call still has its ordinary event');
 }));
 
+test('a drain made from another directory still finds its home from the command', async () => fixture(async ({ home, queue, dir }) => {
+  const [{ event }] = await observe(call(home, { cwd: join(dir, 'elsewhere') }), { root: queue, rules: [], env: {}, now: 1792659900 });
+  const record = await readJson(join(queue, 'wake-drain', `${event.correlationId}.json`));
+  assert.equal(record.rowsSource, 'claim');
+  assert.equal(record.rows.length, 5);
+}));
+
 test('without a resolvable Firstmate home the record carries what the output proves and says the rows are missing', async () => fixture(async ({ queue, dir }) => {
   const stdout = 'WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 77 --recovery-generation 5.6.xyz';
   const [{ event }] = await observe(call(dir, { cwd: dir, rawCommand: 'fm-wake-drain.sh', resultMetadata: { stdout, stderr: '' } }),
