@@ -1,6 +1,7 @@
 import { parseSemanticCommand } from './normalize.ts';
 import { observe } from './observer.ts';
 import { appendEventLog } from './queue.ts';
+import { observeToolCall, TOOL_NAMES } from './tool-events.ts';
 import { turnEndFromClaudeStop } from './turn-end.ts';
 
 // One Claude Code hook delivery. The hook process reads the payload from stdin and hands it
@@ -9,7 +10,13 @@ export async function handleClaudeHook(event, { eventName = event?.hook_event_na
   if (eventName === 'Stop') { await turnEndFromClaudeStop(event, root); return; }
 
   const tool = event.tool_name || event.toolName;
-  if (tool !== 'Bash' || !['PostToolUse', 'PostToolUseFailure'].includes(eventName)) return;
+  if (!['PostToolUse', 'PostToolUseFailure'].includes(eventName)) return;
+  if (TOOL_NAMES.has(tool)) {
+    await observeToolCall({ tool, input: event.tool_input, eventName, outcome: eventName === 'PostToolUseFailure' ? 'failure' : 'success',
+      sessionId: event.session_id, callId: event.tool_use_id, cwd: event.cwd ?? null, startedAt: event.started_at ?? null }, root);
+    return;
+  }
+  if (tool !== 'Bash') return;
   const command = event.tool_input?.command;
   if (typeof command !== 'string') return;
   if (!parseSemanticCommand(command).length) {

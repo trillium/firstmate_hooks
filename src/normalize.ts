@@ -118,7 +118,7 @@ export function parseSemanticCommand(rawCommand) {
   return found;
 }
 
-export function correlationId({ harness, sessionId, callId, rawCommand, timestamp }) {
+export function correlationId({ harness, sessionId, callId, rawCommand }: Record<string, any>) {
   // Prefer harness call IDs. Content fallback is deterministic for replay; repeated
   // identical calls without IDs in one session intentionally collapse to one key.
   const stable = callId

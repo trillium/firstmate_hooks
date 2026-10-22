@@ -252,6 +252,18 @@ The boundary that closes a handling turn, written to `<queue>/turn-end/<turnId>.
 - **Claude Code** records it from the `Stop` hook (register `claude-hook.ts` for `Stop`, see [Claude Code](#claude-code)). The hook prints nothing and exits 0, so it neither blocks the stop nor continues the turn, whatever else is registered for `Stop`. `turnId` hashes the session and the transcript's byte size at the stop, so a replayed delivery of the same stop is the same turn. `drainCallIds` are the `tool_use` ids of the `fm-wake-drain.sh` Bash calls (drains and acknowledgements) after the last prompt, in order, and `toolCallCount` counts every tool call after it, sub-agents' own excluded; both come from the tail (last 4 MiB) of the transcript, which is only read. `lastAssistantMessage` is the payload's `last_assistant_message`, else the last assistant text of the turn. `transcriptPath` keeps the join key with the home directory written as `~`: expand it with the same machine's home.
 - **OpenCode** records it on the `session.idle` event, **Pi** on `agent_settled`. Neither exposes a transcript the observer may read, so the adapter counts the turn's tool calls as they complete: `drainCallIds` and `toolCallCount` are filled, `lastAssistantMessage` and `transcriptPath` are `null`, and `turnId` hashes the session, the adapter's start time and the turn's ordinal.
 
+### State-changing tools (`tool:<Name>`)
+
+`Write`, `Edit`, `NotebookEdit`, `Agent` and `SendMessage` are actions a firstmate takes without an `fm-*` call. Register the hook for them (`PostToolUse` and `PostToolUseFailure`, matcher `Write|Edit|NotebookEdit|Agent|SendMessage`) and each completed call becomes an ordinary `event` in `events/` and `events.jsonl`:
+
+```json
+{"type":"event","operation":"tool:Write","args":[],"rawCommand":"Write ~/code/a.ts","outcome":"success","harness":"claude-code","sessionId":"…","callId":"toolu_…","correlationId":"…","exitCode":null,"resultMetadata":null,"source":{"eventName":"PostToolUse","tool":"Write"}}
+```
+
+`rawCommand` names the target and never the content: the file path (`Write`, `Edit`, `NotebookEdit`), the sub-agent type and its short description (`Agent`), or the recipient (`SendMessage`). What was written, the edit's old and new text, an agent's prompt, a message body and the tool's response or error are not read into the record. The line is scrubbed and capped at 400 characters.
+
+These events are persisted and logged but never evaluated against the rules: a rule with `"operation": "*"` means any recognized Firstmate call, and an edit is not one, so a wildcard rule such as `fm-ledger-timeline` does not fire on them.
+
 ## Validation
 
 ```sh
