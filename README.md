@@ -259,6 +259,16 @@ The boundary that closes a handling turn, written to `<queue>/turn-end/<turnId>.
 - **Claude Code** records it from the `Stop` hook (register `claude-hook.ts` for `Stop`, see [Claude Code](#claude-code)). The hook prints nothing and exits 0, so it neither blocks the stop nor continues the turn, whatever else is registered for `Stop`. `turnId` hashes the session and the transcript's byte size at the stop, so a replayed delivery of the same stop is the same turn. `drainCallIds` are the `tool_use` ids of the `fm-wake-drain.sh` Bash calls (drains and acknowledgements) after the last prompt, in order, and `toolCallCount` counts every tool call after it, sub-agents' own excluded; both come from the tail (last 4 MiB) of the transcript, which is only read. `lastAssistantMessage` is the payload's `last_assistant_message`, else the last assistant text of the turn. `transcriptPath` keeps the join key with the home directory written as `~`: expand it with the same machine's home.
 - **OpenCode** records it on the `session.idle` event, **Pi** on `agent_settled`. Neither exposes a transcript the observer may read, so the adapter counts the turn's tool calls as they complete: `drainCallIds` and `toolCallCount` are filled, `lastAssistantMessage` and `transcriptPath` are `null`, and `turnId` hashes the session, the adapter's start time and the turn's ordinal.
 
+### `wake-notice`
+
+The text of the wake the firstmate was shown, written to `<queue>/wake-notice/<noticeId>.json` and `events.jsonl`:
+
+```json
+{"type":"wake-notice","harness":"claude-code","sessionId":"…","noticeId":"<sha256>","turnId":"<the turn it opened>","finishedAt":"<when the harness delivered it>","body":"firstmate watcher wake - one supervision event needs a handling turn now.\ncheck: …","source":"transcript"}
+```
+
+A Stop-hook wake reaches the session as a queued `<task-notification>` that opens the handling turn. It is recorded by the `Stop` hook that closes that turn (the same delivery that writes the [`turn-end`](#turn-end)), from the turn's opening prompt in the transcript, when that prompt is a task notification carrying a Stop-hook blocking error from the firstmate watcher; a turn opened by anything else records none. `UserPromptSubmit` is deliberately not used: a queued notification is not a typed prompt, and the transcript is where the delivered text is known to be. `finishedAt` is the delivery time the transcript recorded, not the time the turn ended, and the notice therefore reaches the queue when its turn ends, not when the wake arrives. The id is the transcript entry's own id, so a wake seen by several Stops (a Stop-hook continuation) is one notice and two wakes with identical text are two. The body has its markup tags removed, keeps its line breaks, is scrubbed, and is capped at 1000 characters.
+
 ### State-changing tools (`tool:<Name>`)
 
 `Write`, `Edit`, `NotebookEdit`, `Agent` and `SendMessage` are actions a firstmate takes without an `fm-*` call. Register the hook for them (`PostToolUse` and `PostToolUseFailure`, matcher `Write|Edit|NotebookEdit|Agent|SendMessage`) and each completed call becomes an ordinary `event` in `events/` and `events.jsonl`:

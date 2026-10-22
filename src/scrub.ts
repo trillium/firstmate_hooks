@@ -59,11 +59,13 @@ export function scrubHome(text: string): string {
 
 // Scrub, then cap: a secret is replaced before the cut, so truncation cannot leave half
 // of one visible. A capped value ends in an ellipsis and is exactly `max` characters.
-export function scrubText(value: unknown, max = 400): string {
+export function scrubText(value: unknown, max = 400, { keepNewlines = false }: { keepNewlines?: boolean } = {}): string {
   if (value === null || value === undefined) return '';
   let text = String(value);
+  // Line breaks become spaces unless the caller wants its lines kept (at most one blank line).
+  text = keepNewlines ? text.replace(/\r\n?/g, '\n').replace(/\t+/g, ' ').replace(/\n{3,}/g, '\n\n') : text.replace(/[\r\n\t]+/g, ' ');
   // eslint-disable-next-line no-control-regex
-  text = text.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
+  text = text.replace(keepNewlines ? /[\u0000-\u0009\u000b-\u001f\u007f]/g : /[\u0000-\u001f\u007f]/g, '');
   for (const pattern of TOKEN_PATTERNS) text = text.replace(pattern, REDACTED);
   text = text.replace(AUTH_SCHEME, `$1 ${REDACTED}`);
   text = text.replace(URL_USERINFO, `$1${REDACTED}@`);

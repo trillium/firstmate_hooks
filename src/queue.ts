@@ -73,11 +73,15 @@ export async function persistEvent(event, root = queueRoot()) {
 // write-once under its own directory, never in events/, so a consumer that reads every
 // events/*.json for normalized calls sees exactly the files it always did. The log line is
 // appended on every delivery, like an event's, and carries the record's own `type`.
-export async function persistRecord(kind, id, record, root = queueRoot(), hint: Record<string, any> = {}) {
+export async function persistRecord(kind, id, record, root = queueRoot(), hint: Record<string, any> = {},
+  { logRepeats = true }: { logRepeats?: boolean } = {}) {
   await ensureQueue(root);
   const directory = join(root, kind);
   await mkdir(directory, { recursive: true });
   const path = join(directory, `${safe(id)}.json`);
+  // A record that is the same fact however often it is seen (a wake delivered once, closed by
+  // several Stops) is neither rewritten nor logged again.
+  if (!logRepeats && await stat(path).then(() => true, () => false)) return path;
   const stamped = await stampRecord(record, root, hint);
   await writeOnce(path, stamped);
   await appendEventLog(stamped, root);

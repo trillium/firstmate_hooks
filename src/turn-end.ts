@@ -3,6 +3,7 @@ import { open } from 'node:fs/promises';
 import { parseSemanticCommand } from './normalize.ts';
 import { persistRecord } from './queue.ts';
 import { scrubPath, scrubText } from './scrub.ts';
+import { buildWakeNotice, isWakePrompt, recordWakeNotice } from './wake-notice.ts';
 
 // The turn-end record: where one handling turn stopped. A drain says a wake arrived and
 // the calls after it say what was done; this is the boundary that closes the turn, so the
@@ -46,22 +47,32 @@ function startsTurn(entry) {
   return blocksOf(entry).some(block => block?.type === 'text' || block?.type === 'image');
 }
 
+const promptText = entry => {
+  const content = entry.message?.content;
+  if (typeof content === 'string') return content;
+  return blocksOf(entry).filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n');
+};
+
 // Reads the final turn of a Claude transcript (JSONL): everything after the last prompt.
 // Only the tail of the file is read, and entries that do not parse are skipped, because a
 // hook runs while the harness is still writing the file.
 export async function analyzeTranscript(path: unknown) {
-  const empty = { size: null as number | null, drainCallIds: [] as string[], toolCallCount: null as number | null, lastAssistantText: null as string | null };
+  const empty = { size: null as number | null, drainCallIds: [] as string[], toolCallCount: null as number | null, lastAssistantText: null as string | null,
+    opening: null as { text: string; uuid: string | null; timestamp: string | null } | null };
   if (typeof path !== 'string' || !path) return empty;
   const { size, lines } = await readTailLines(path);
   if (size === null) return empty;
   const drainCallIds: string[] = [];
-  let toolCallCount = 0, lastAssistantText: string | null = null;
+  let toolCallCount = 0, lastAssistantText: string | null = null, opening: typeof empty.opening = null;
   for (let index = lines.length - 1; index >= 0; index--) {
     const line = lines[index];
     if (!line.trim()) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (startsTurn(entry)) break;
+    if (startsTurn(entry)) {
+      opening = { text: promptText(entry), uuid: typeof entry.uuid === 'string' ? entry.uuid : null, timestamp: typeof entry.timestamp === 'string' ? entry.timestamp : null };
+      break;
+    }
     if (entry?.type !== 'assistant' || entry.isSidechain === true) continue;
     const blocks = blocksOf(entry);
     for (const block of [...blocks].reverse()) {
@@ -75,7 +86,7 @@ export async function analyzeTranscript(path: unknown) {
       if (written) lastAssistantText = written;
     }
   }
-  return { size, drainCallIds, toolCallCount, lastAssistantText };
+  return { size, drainCallIds, toolCallCount, lastAssistantText, opening };
 }
 
 export function buildTurnEnd({ harness, sessionId, turnId, finishedAt = new Date().toISOString(), drainCallIds = [], toolCallCount = null,
@@ -107,6 +118,11 @@ export async function turnEndFromClaudeStop(payload, root?: string) {
     lastAssistantMessage: typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : turn.lastAssistantText,
     transcriptPath: payload.transcript_path, stopHookActive: typeof payload.stop_hook_active === 'boolean' ? payload.stop_hook_active : null });
   await recordTurnEnd(record, root, { cwd: payload.cwd });
+  // A turn the watcher's wake opened also records the wake text it was opened with.
+  if (turn.opening && isWakePrompt(turn.opening.text)) {
+    await recordWakeNotice(buildWakeNotice({ harness: 'claude-code', sessionId: payload.session_id, turnId: record.turnId, opening: turn.opening }),
+      root, { cwd: payload.cwd });
+  }
   return record;
 }
 
