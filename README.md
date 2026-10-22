@@ -89,26 +89,33 @@ The worker passes `FM_HOOK_CORRELATION_ID` and `FM_HOOK_IDEMPOTENCY_KEY` to the 
 
 ### Claude Code
 
-Add these hooks to the applicable Claude settings file; merge with existing hooks rather than replacing them. Register only post events—no `PreToolUse` behavior is needed:
+Add these hooks to the applicable Claude settings file; merge with existing hooks rather than replacing them. `<hook>` stands for the same command each time: `FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_MACHINE=<name> /Users/trilliumsmith/.bun/bin/bun /absolute/path/fm-hooks/src/claude-hook.ts` (`FM_HOOK_RULES` too, where rules are used).
 
 ```json
 {
   "hooks": {
-    "PostToolUse": [{
-      "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_RULES=/absolute/path/fm-hooks.rules.json /Users/trilliumsmith/.bun/bin/bun /absolute/path/fm-hooks/src/claude-hook.ts" }]
-    }],
-    "PostToolUseFailure": [{
-      "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_RULES=/absolute/path/fm-hooks.rules.json /Users/trilliumsmith/.bun/bin/bun /absolute/path/fm-hooks/src/claude-hook.ts" }]
-    }]
+    "PostToolUse": [{ "matcher": "Bash|Write|Edit|NotebookEdit|Agent|SendMessage", "hooks": [{ "type": "command", "command": "<hook>" }] }],
+    "PostToolUseFailure": [{ "matcher": "Bash|Write|Edit|NotebookEdit|Agent|SendMessage", "hooks": [{ "type": "command", "command": "<hook>" }] }],
+    "PreToolUse": [{ "matcher": "Bash|Write|Edit|NotebookEdit|Agent|SendMessage", "hooks": [{ "type": "command", "command": "<hook>" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "<hook>" }] }]
   }
 }
 ```
 
-To record turn ends, also register the same command for `Stop` (no matcher): `"Stop": [{"hooks": [{"type": "command", "command": "<the same command>"}]}]`. A `Stop` delivery is the only non-Bash event the adapter reads, and it only writes a [`turn-end`](#turn-end) record.
+Only the first two are needed for the original behaviour (`fm-*` calls in Bash). Each extra registration adds one record type and nothing else:
 
-The adapter observes Bash only for post-success/post-failure. Claude's Bash input is a shell command string, not argv; args in normalized events are a conservative tokenization and `rawCommand` is authoritative. If the lifecycle event does not supply a call ID, the deterministic fallback key collapses identical commands in the same session.
+| Hook | Records | Without it |
+|---|---|---|
+| `PostToolUse` / `PostToolUseFailure`, matcher `Bash` | the `fm-*` events and `seen` lines | no `fm-*` events |
+| the same, for `Write\|Edit\|NotebookEdit\|Agent\|SendMessage` | [`tool:<Name>` events](#state-changing-tools-toolname) | no tool events |
+| `PreToolUse` | `startedAt` and `durationMs` on the post events (see below) | both stay `null` |
+| `Stop` | [`turn-end`](#turn-end) and [`wake-notice`](#wake-notice) records | neither is written |
+
+Every one of these hooks only observes. None prints anything, none exits non-zero, and none can block, rewrite or continue a tool call or a stop. `PreToolUse` runs before the tool, so it adds one process start (tens of milliseconds) in front of each recorded call, which is why it is optional: it records a timestamp for a call only when the post hook will record that call (an `fm-*` Bash call or one of the tools above), and nothing for any other.
+
+**Timing and exit codes.** Claude's payloads carry no start time or duration. With `PreToolUse` registered, the hook stores a timestamp per `tool_use_id` in `<queue>/pre/` (an id and a time, never the command), the post hook for that id turns it into `startedAt` and `durationMs` (the time between the two hooks, including their start-up) and removes it, and a timestamp whose post event never came is swept after six hours. `exitCode` was `null` for every Claude Bash event; a failed call now carries the code the harness prints on the first line of its error (`Exit code 7`). A success still has `exitCode: null`, because the harness also counts some non-zero codes as success (a `grep` that matches nothing) and the observer does not invent a 0. A piped call reports the status of the pipe, which is the status the harness saw.
+
+Claude's Bash input is a shell command string, not argv; args in normalized events are a conservative tokenization and `rawCommand` is authoritative. If the lifecycle event does not supply a call ID, the deterministic fallback key collapses identical commands in the same session.
 
 ### OpenCode
 
