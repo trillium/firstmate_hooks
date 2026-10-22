@@ -83,8 +83,8 @@ export async function persistRecord(kind, id, record, root = queueRoot(), hint: 
   // several Stops) is neither rewritten nor logged again.
   if (!logRepeats && await stat(path).then(() => true, () => false)) return path;
   const stamped = await stampRecord(record, root, hint);
-  await writeOnce(path, stamped);
-  await appendEventLog(stamped, root);
+  const created = await writeOnce(path, stamped);
+  if (created || logRepeats) await appendEventLog(stamped, root);
   return path;
 }
 

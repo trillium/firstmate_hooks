@@ -1,8 +1,8 @@
-import { open, readFile, rename, rm, stat } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { open, readFile, rm, stat } from 'node:fs/promises';
 
 // An exclusive lock file holding its owner's pid. A lock whose owner is gone is reclaimed
-// by an atomic rename, so concurrent claimants cannot remove a lock another just acquired.
+// under a guard lock that re-checks the owner, so concurrent claimants cannot remove a lock
+// another just acquired.
 // Returns the open lock file, or null while someone else legitimately holds it.
 export async function claimLock(path: string) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -25,14 +25,37 @@ export async function claimLock(path: string) {
         const age = await stat(path).then(entry => Date.now() - entry.mtimeMs, () => Infinity);
         if (age < 2000) return null;
       }
-      // Reclaim a dead owner's lock via atomic rename so concurrent claimants cannot
-      // remove a newly acquired lock at the original path.
-      const stale = `${path}.${randomUUID()}.stale`;
-      try { await rename(path, stale); await rm(stale, { force: true }); }
-      catch (renameError) { if (renameError.code !== 'ENOENT') throw renameError; }
+      // Reclaim a dead owner's lock. Two claimants can both see the same dead pid, and the
+      // loser of that race must not rename away the lock the winner has just created, so the
+      // reclaim itself is serialized by a second lock and the owner is checked again inside it.
+      if (!await reclaimDeadLock(path)) return null;
     }
   }
   return null;
+}
+
+async function reclaimDeadLock(path: string): Promise<boolean> {
+  const guardPath = `${path}.reclaim`;
+  let guard;
+  try { guard = await open(guardPath, 'wx', 0o600); }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    // A reclaimer that died holding the guard must not wedge the lock for good.
+    const age = await stat(guardPath).then(entry => Date.now() - entry.mtimeMs, () => 0);
+    if (age > 5000) await rm(guardPath, { force: true });
+    return false;
+  }
+  try {
+    let pid;
+    try { pid = Number((await readFile(path, 'utf8')).trim()); }
+    catch (readError) { if (readError.code === 'ENOENT') return true; throw readError; }
+    if (Number.isInteger(pid) && pid > 0) {
+      try { process.kill(pid, 0); return false; }
+      catch (killError) { if (killError.code !== 'ESRCH') return false; }
+    }
+    await rm(path, { force: true });
+    return true;
+  } finally { await guard.close(); await rm(guardPath, { force: true }); }
 }
 
 const sleep = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms); });

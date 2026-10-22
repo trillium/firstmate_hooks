@@ -153,3 +153,32 @@ test('stampRecord leaves a caller\'s own seq and fields alone and adds only what
   assert.equal(none.fmHome, null);
   assert.equal(none.seq, 1, 'a stamped record that already had a seq did not consume one');
 }));
+
+test('concurrent processes racing to reclaim a dead owner\'s lock still never share a seq', async () => fixture(async ({ queue }) => {
+  const script = fileURLToPath(new URL('../src/origin.ts', import.meta.url));
+  for (let round = 0; round < 4; round++) {
+    const root = join(queue, `round-${round}`);
+    await nextSeq(root);
+    const dead = spawn(process.execPath, ['-e', '0']);
+    await new Promise(resolve => dead.on('close', resolve));
+    await writeFile(join(root, 'seq', 'counter.lock'), `${dead.pid}\n`);
+    const outputs = await Promise.all(Array.from({ length: 12 }, () => new Promise<string>(resolve => {
+      const child = spawn(process.execPath, ['-e', `import('${script}').then(async m => { const out = []; for (let i = 0; i < 4; i++) out.push(await m.nextSeq(${JSON.stringify(root)})); console.log(out.join(',')); })`], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let text = '';
+      child.stdout.on('data', chunk => { text += chunk; });
+      child.on('close', () => resolve(text));
+    })));
+    const seqs = outputs.flatMap(text => text.trim().split(',')).map(Number);
+    assert.equal(seqs.length, 48);
+    assert.equal(new Set(seqs).size, 48, `round ${round}: ${seqs.sort((a, b) => a - b).join(' ')}`);
+  }
+}), 60000);
+
+test('resolving a home from a very long command costs about its length', () => {
+  for (const hostile of [`${'a:/'.repeat(40000)}`, `x=${'"/'.repeat(30000)}`, `/${'fm_home/'.repeat(5000)}`, 'z'.repeat(200000)]) {
+    const started = Date.now();
+    resolveFmHome({}, '/tmp', hostile);
+    assert.ok(Date.now() - started < 200, `${hostile.slice(0, 12)}… took ${Date.now() - started} ms`);
+  }
+  assert.equal(resolveFmHome({}, '/tmp', 'cat ~/fm_home/mini0-ops/state/x', ), `${process.env.HOME}/fm_home/mini0-ops`);
+});

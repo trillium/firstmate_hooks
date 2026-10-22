@@ -1,6 +1,6 @@
 import { correlationId } from './normalize.ts';
 import { persistEvent } from './queue.ts';
-import { scrubText } from './scrub.ts';
+import { scrubPath, scrubText } from './scrub.ts';
 
 // State-changing tools that are not Firstmate calls but are still actions a firstmate takes:
 // a file written or edited, a sub-agent started, a message sent. They are recorded as the
@@ -35,7 +35,7 @@ export async function observeToolCall({ tool, input, outcome, sessionId, callId,
     operation: `tool:${tool}`,
     args: [],
     rawCommand,
-    cwd: cwd ?? null,
+    cwd: scrubPath(cwd),
     project: null,
     harness: 'claude-code',
     sessionId: sessionId ?? null,

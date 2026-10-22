@@ -108,18 +108,24 @@ async function branchOutcomesFor(state: string, now: number) {
     const value = Number(lines(await readTail(join(state, name), 64))[0]);
     return Number.isInteger(value) ? value : null;
   };
-  const [processed, cursor] = [await number('.branch-outcomes-processed'), await number('.branch-outcomes-cursor')];
-  if (processed === null || cursor === null) return [];
-  const outcomes: { seq: number; recordedMinutesAgo: number; task: string; text: string }[] = [];
+  // No processed mark yet means nothing has been processed, as the drain reads it.
+  const processed = (await number('.branch-outcomes-processed')) ?? 0, cursor = await number('.branch-outcomes-cursor');
+  if (cursor === null) return [];
+  const outcomes: { seq: number; recordedMinutesAgo: number; task: string; text: string; count: number }[] = [];
   for (const line of lines(await readTail(join(state, 'branch-outcomes.jsonl'), OUTCOME_TAIL_BYTES))) {
     let row;
     try { row = JSON.parse(line); } catch { continue; }
     if (!row || row.verdict !== 'captain' || row.silent === true || !Number.isInteger(row.seq)) continue;
     if (row.seq <= processed || row.seq > cursor) continue;
-    outcomes.push({ seq: row.seq, recordedMinutesAgo: Math.max(0, Math.floor((now - Number(row.epoch || now)) / 60)),
-      task: scrubText(row.task, 120), text: scrubText(row.summary, WAKE_TEXT_CAP) });
+    // Like the drain: one entry per task, its newest unprocessed row, counting how many there are;
+    // tasks keep the order of their oldest unprocessed row.
+    const task = scrubText(row.task, 120);
+    const entry = { seq: row.seq, recordedMinutesAgo: Math.max(0, Math.floor((now - Number(row.epoch || now)) / 60)),
+      task, text: scrubText(row.summary, WAKE_TEXT_CAP), count: 1 };
+    const earlier = outcomes.findIndex(other => other.task === task);
+    if (earlier < 0) outcomes.push(entry); else outcomes[earlier] = { ...entry, count: outcomes[earlier].count + 1 };
   }
-  return outcomes.slice(-OUTCOME_LIMIT);
+  return outcomes.slice(0, OUTCOME_LIMIT);
 }
 
 function outputOf(event): string {
@@ -140,17 +146,24 @@ export async function buildWakeDrain(event, { env = process.env, now = Math.floo
   const state = fmHome ? stateDirOf(fmHome) : null;
 
   let rows: any[] = [], rowsSource = 'unavailable', claimed: number | null = null, generation: string | null = null;
-  if (state) {
+  const text = outputOf(event);
+  // A main drain with every row granted to the live supervision branch presents none of them.
+  const heldByBranch = text.includes('WAKE ROWS HELD BY SUPERVISION BRANCH');
+  if (state && heldByBranch) rowsSource = 'held';
+  else if (state) {
     const queueText = await readTail(join(state, '.wake-queue'), QUEUE_BYTES);
     const queue = parseQueue(queueText);
-    const claim = new Set(lines(await readTail(join(state, '.main-eligible-rows'), QUEUE_BYTES)).filter(l => /^\d+$/.test(l)).map(Number));
+    const seqsIn = async name => new Set(lines(await readTail(join(state, name), QUEUE_BYTES)).filter(l => /^\d+$/.test(l)).map(Number));
+    const claim = await seqsIn('.main-eligible-rows'), reserved = await seqsIn('.branch-eligible-rows');
     // A queue that cannot be read at all is unavailable; one that reads empty has no rows.
     if (queueText !== null) {
-      const mine = claim.size ? queue.filter(row => claim.has(row.seq)) : queue;
+      // Without a claim the whole queue is only a guess at what was presented, minus the rows
+      // a branch grant holds; it then names no ack cutoff of its own.
+      const mine = claim.size ? queue.filter(row => claim.has(row.seq)) : queue.filter(row => !reserved.has(row.seq));
       rowsSource = claim.size ? 'claim' : 'queue';
       const cutoff = output.ackThrough;
       rows = dedupe(mine.filter(row => cutoff === null || row.seq <= cutoff));
-      claimed = rows.length ? Math.max(...rows.map(row => row.seq)) : null;
+      claimed = claim.size && rows.length ? Math.max(...rows.map(row => row.seq)) : null;
     }
     const marker = lines(await readTail(join(state, '.watcher-down'), 256))[0]?.trim();
     generation = marker && /^[a-z]+:[a-z]+:[A-Za-z0-9._-]+$/.test(marker) ? marker.split(':')[2] : null;
@@ -171,6 +184,9 @@ export async function buildWakeDrain(event, { env = process.env, now = Math.floo
     rowsSource,
     annotation: state && rows.length ? await annotationFor(state, rows) : null,
     branchOutcomes: state ? await branchOutcomesFor(state, now) : [],
+    // true when the drain's own output shows the section; null when the output was filtered and
+    // the list is the store's unprocessed captain outcomes, not proof that the drain printed them.
+    branchOutcomesPresented: text.includes('BRANCH OUTCOMES (') ? true : null,
     openDecisions: output.openDecisions.map(line => scrubText(line, WAKE_TEXT_CAP)),
     openDecisionsSource: output.openDecisions.length ? 'output' : 'unavailable',
     finishedAt: event.finishedAt,

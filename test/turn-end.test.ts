@@ -108,7 +108,7 @@ test('the payload\'s last_assistant_message wins over the transcript, and a Stop
   assert.equal(record.toolCallCount, null);
   assert.deepEqual(record.drainCallIds, []);
   assert.equal(record.stopHookActive, true);
-  assert.equal(record.turnId, createHash('sha256').update('s-2\0null').digest('hex'));
+  assert.match(record.turnId, /^[0-9a-f]{64}$/);
 }));
 
 test('a Stop with no session id records nothing', async () => fixture(async ({ queue }) => {

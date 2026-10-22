@@ -20,6 +20,20 @@ test('scrubText redacts secrets, tokens, device codes and home paths', () => {
     ['{"user_code":"WXYZ-9876","device_code":"3584d83530557fdd1f46' + 'af8289938c8ef79f9dc5"}', /WXYZ-9876|3584d835/],
     ['-----BEGIN PR' + 'IVATE KEY-----\nMII' + 'EvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----', /MIIEvQ/],
     ['opaque Zx9Qm2Lp8Vt4Rb7Nc1Hd5Jf3Gk6Ws0Ya', /Zx9Qm2Lp8Vt4/],
+    ['SECRET_KEY=' + 'abcd1234efgh', /abcd1234efgh/],
+    ['signing_key=h' + 'unter2hunter2', /hunter2hunter2/],
+    ['client-secret' + ': s3cr3tvalue', /s3cr3tvalue/],
+    ['pwd=le' + 'tmein99', /letmein99/],
+    ['sessionid=a' + 'bc123def456', /abc123def456/],
+    ['mysql --passwor' + 'd hunter2 -h db', /hunter2/],
+    ['tool --token=' + 'abc123xyz --other', /abc123xyz/],
+    ['{\\"token\\":\\"abc123secret\\"}', /abc123secret/],
+    ['device code ABCD1234 was shown', /ABCD1234/],
+    ['enter ABCD-1234 at https://github.com/login/device', /ABCD-1234/],
+    ['https://discord.com/api/webhooks/1234567' + '89012345678/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789', /AbCdEfGh/],
+    ['https://hooks.slack.' + 'com/services/T0123ABCD/B0123ABCD/abcdefghij1234567890ABCD', /abcdefghij1234567890ABCD/],
+    ['https://api.telegram.org/bot12345' + '6789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/getMe', /AAHdqTcvCH1v/],
+    ['see /root/secrets/x', /\/root\//],
   ];
   for (const [input, leaked] of cases) {
     const out = scrubText(input);
@@ -35,6 +49,8 @@ test('scrubText rewrites home paths and keeps ordinary text, SHAs and branch nam
   const plain = 'merged fm/fm-hooks-wake-events at 8c510e0 (c660db3a1f0d2e3b4c5d6e7f8091a2b3c4d5e6f7) via PR #12';
   assert.equal(scrubText(plain), plain);
   assert.equal(scrubText('worker is blocked: needs a decision, key=nm-converge-stores'), 'worker is blocked: needs a decision, key=nm-converge-stores');
+  assert.equal(scrubText('needs-decision [at=1792659853] [key=nm-converge-stores]: use the code review process'), 'needs-decision [at=1792659853] [key=nm-converge-stores]: use the code review process');
+  assert.equal(scrubText('open https://github.com/trillium/firstmate_hooks/pull/13'), 'open https://github.com/trillium/firstmate_hooks/pull/13');
 });
 
 test('scrubText strips control characters and caps length, counting the marker', () => {

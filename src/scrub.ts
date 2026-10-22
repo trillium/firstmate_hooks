@@ -30,18 +30,32 @@ const AUTH_SCHEME = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi;
 
 // The value of a key that is named like a credential: key=value, key: value, "key":"value".
-const CREDENTIAL_KEY = '[\\w-]*(?:token|secret|passw(?:or)?d|passwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|authorization|cookie|user_code|device_code|verification_code|one[_-]?time[_-]?code|otp)s?';
-const KEY_VALUE = new RegExp(`(\\b${CREDENTIAL_KEY}["']?\\s*[:=]\\s*)(?!\\[redacted\\])("[^"]*"|'[^']*'|[^\\s,;&"'}\\]]+)`, 'gi');
+const CREDENTIAL_KEY = '[\\w-]*(?:token|secret|passw(?:or)?d|passwd|pwd|(?:api|access|private|signing|encryption|auth|client|session)[_-]?key|credentials?|authorization|cookie|session[_-]?id|user[_-]code|device[_-]code|verification[_-]code|one[_-]?time[_-]?code)[\\w-]*';
+// The key may be quoted, including by an escaped quote inside a JSON string.
+const KEY_VALUE = new RegExp(`(\\b${CREDENTIAL_KEY}(?:\\\\?["'])?\\s*[:=]\\s*)(?!\\[redacted\\])("[^"]*"|\\\\"[^"\\\\]*\\\\"|'[^']*'|[^\\s,;&"'}\\]]+)`, 'gi');
+
+// `--password hunter2`, `--token=abc`: a credential-named flag and its value.
+const FLAG_VALUE = /(--(?:password|passwd|token|secret|api-?key|access-?key|auth-?token|client-?secret)(?:=|\s+))(?!\[redacted\])(?!-)\S+/gi;
+
+// Credentials carried in the path of a well-known URL shape.
+const URL_TOKENS: RegExp[] = [
+  /(\/api\/webhooks\/\d+\/)[\w-]{20,}/g,
+  /(\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/)[A-Za-z0-9]{16,}/g,
+  /(\/bot\d{5,}:)[\w-]{20,}/g,
+];
 
 // A device-flow code spoken in prose: "enter the code ABCD-1234".
 const DEVICE_CODE = /(\b(?:user |device |verification |one-time )?code\b[^\n]{0,24}?)\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/gi;
+// The same code unhyphenated after "device code", or shown with the device-login URL after it.
+const DEVICE_CODE_PLAIN = /(\b(?:device|user|verification) code\W{0,4})(?=[A-Z0-9]*\d)[A-Z0-9]{8}\b/g;
+const DEVICE_CODE_BEFORE_URL = /\b[A-Z0-9]{4}-[A-Z0-9]{4}\b(?=[^\n]{0,60}login\/device)/g;
 
 // An opaque 32+ character URL-safe token: mixed case and at least one digit. All-hex
 // strings (commit SHAs) and path-like or hyphenated words do not satisfy all three.
 const OPAQUE = /(?<![\w/.-])(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[a-z])(?=[A-Za-z0-9_]*[A-Z])[A-Za-z0-9_]{32,}(?![\w/.-])/g;
 
 // /Users/<name>, /home/<name> and the running user's own home collapse to ~.
-const HOME_PATH = /\/(?:Users|home)\/[^/\s:'"`)\]]+/g;
+const HOME_PATH = /\/(?:(?:Users|home)\/[^/\s:'"`)\]]+|root(?=\/|\s|$))/g;
 
 function ownHome() {
   try {
@@ -71,6 +85,9 @@ export function scrubText(value: unknown, max = 400, { keepNewlines = false }: {
   text = text.replace(URL_USERINFO, `$1${REDACTED}@`);
   text = text.replace(KEY_VALUE, `$1${REDACTED}`);
   text = text.replace(DEVICE_CODE, `$1${REDACTED}`);
+  text = text.replace(DEVICE_CODE_PLAIN, `$1${REDACTED}`).replace(DEVICE_CODE_BEFORE_URL, REDACTED);
+  text = text.replace(FLAG_VALUE, `$1${REDACTED}`);
+  for (const pattern of URL_TOKENS) text = text.replace(pattern, `$1${REDACTED}`);
   text = text.replace(OPAQUE, REDACTED);
   text = scrubHome(text);
   if (Number.isFinite(max) && max > 0 && text.length > max) text = `${text.slice(0, max - 1)}…`;

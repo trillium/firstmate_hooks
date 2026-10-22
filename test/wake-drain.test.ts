@@ -131,10 +131,39 @@ test('the annotation is the newest status line of the newest signalling task, an
   const record = await readJson(join(queue, 'wake-drain', `${event.correlationId}.json`));
   assert.deepEqual(record.annotation, { task: 'brain-registry', state: 'needs-decision', at: 1792659853, key: 'nm-converge-stores',
     text: 'need the store location, see ~/data/x' });
-  assert.deepEqual(record.branchOutcomes, [{ seq: 1180, recordedMinutesAgo: 2, task: 'vrms-2166', text: 'PR is mergeable [redacted]' }],
+  assert.deepEqual(record.branchOutcomes, [{ seq: 1180, recordedMinutesAgo: 2, task: 'vrms-2166', text: 'PR is mergeable [redacted]', count: 1 }],
     'processed (1178), routine (1179), silent (1181) and not-yet-presented (1182) rows are excluded');
   assert.deepEqual(record.openDecisions, []);
   assert.equal(record.openDecisionsSource, 'unavailable');
+}));
+
+test('rows a live branch grant holds are not claimed as presented, with or without a claim file', async () => fixture(async ({ home, queue, env, state }) => {
+  const held = { stdout: 'WAKE ROWS HELD BY SUPERVISION BRANCH: 7 queued row(s) (3414,4234) are granted to the live supervision branch' };
+  const [{ event: a }] = await observe(call(home, { callId: 'held', resultMetadata: held }), { root: queue, rules: [], env });
+  const heldRecord = await readJson(join(queue, 'wake-drain', `${a.correlationId}.json`));
+  assert.deepEqual([heldRecord.rows, heldRecord.rowsSource, heldRecord.ackThrough], [[], 'held', null]);
+  await rm(join(state, '.main-eligible-rows'));
+  await writeFile(join(state, '.branch-eligible-rows'), '3414\n4234\n4235\n');
+  const [{ event: b }] = await observe(call(home, { callId: 'guess' }), { root: queue, rules: [], env });
+  const guess = await readJson(join(queue, 'wake-drain', `${b.correlationId}.json`));
+  assert.equal(guess.rowsSource, 'queue');
+  assert.deepEqual(guess.rows.map(row => row.seq), [4236, 4238, 4239], 'granted rows 3414/4234/4235 are excluded');
+  assert.equal(guess.ackThrough, null, 'a guess names no ack cutoff');
+}));
+
+test('with no processed mark every delivered captain outcome is unprocessed, collapsed to one per task', async () => fixture(async ({ home, queue, env, state }) => {
+  await rm(join(state, '.branch-outcomes-processed'));
+  await writeFile(join(state, 'branch-outcomes.jsonl'), [
+    { seq: 1, epoch: 1792659000, task: 'a', verdict: 'captain', summary: 'first', silent: false },
+    { seq: 2, epoch: 1792659100, task: 'b', verdict: 'captain', summary: 'b only', silent: false },
+    { seq: 3, epoch: 1792659200, task: 'a', verdict: 'captain', summary: 'newest for a', silent: false },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  const [{ event }] = await observe(call(home), { root: queue, rules: [], env, now: 1792659900 });
+  const record = await readJson(join(queue, 'wake-drain', `${event.correlationId}.json`));
+  assert.deepEqual(record.branchOutcomes.map(row => [row.task, row.seq, row.text, row.count]), [['a', 3, 'newest for a', 2], ['b', 2, 'b only', 1]]);
+  assert.equal(record.branchOutcomesPresented, null);
+  const [{ event: shown }] = await observe(call(home, { callId: 'shown', resultMetadata: { stdout: 'BRANCH OUTCOMES (captain outcomes ...):\n' } }), { root: queue, rules: [], env, now: 1792659900 });
+  assert.equal((await readJson(join(queue, 'wake-drain', `${shown.correlationId}.json`))).branchOutcomesPresented, true);
 }));
 
 test('building the record reads the Firstmate home and changes nothing in it', async () => fixture(async ({ home, queue, env, snapshot }) => {

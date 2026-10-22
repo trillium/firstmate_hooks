@@ -113,7 +113,8 @@ export async function turnEndFromClaudeStop(payload, root?: string) {
   if (typeof payload?.session_id !== 'string' || !payload.session_id) return null;
   const turn = await analyzeTranscript(payload.transcript_path);
   const record = buildTurnEnd({ harness: 'claude-code', sessionId: payload.session_id,
-    turnId: sha256(payload.session_id, turn.size),
+    // An unreadable transcript has no position: the clock stands in, so turns do not collapse into one id.
+    turnId: sha256(payload.session_id, turn.size ?? `t${Date.now()}`),
     drainCallIds: turn.drainCallIds, toolCallCount: turn.toolCallCount,
     lastAssistantMessage: typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : turn.lastAssistantText,
     transcriptPath: payload.transcript_path, stopHookActive: typeof payload.stop_hook_active === 'boolean' ? payload.stop_hook_active : null });
