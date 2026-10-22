@@ -193,6 +193,33 @@ Each recognized event contains `operation`, tokenized `args`, exact `rawCommand`
 
 A call is a Firstmate call when its command basename matches `/^fm[-_][A-Za-z0-9_.-]+$/`. That covers `fm-spawn.sh`, `bin/fm-send.sh`, and `fm_dispatch` alike. It is not a list of approved names. The command word must be the call itself, optionally after a path, preceding environment assignments, or a compound-command lead (`do`, `then`, `if`, `while`, `{`), at a shell command-list segment start. A script passed to `bash -c` (or `sh`/`dash`/`ksh`/`zsh -c`, including flag clusters such as `-lc`) is parsed by the same rules one quoting level down, so `bash -c 'for t in a b; do fm-spawn.sh "$t"; done'` is a call to `fm-spawn.sh`; a spawn loop that prints several `spawned <task>` lines records every task. Echoed text, comments, substrings, and names that merely contain `fm` do not match. This is not a shell parser; heredocs, command substitution, functions, aliases, interactive shells, scripts running outside harness tool events, and non-Bash tools are unsupported. Aliases and shell-resolved names are not recognized. A rule with `"operation": "*"` runs after any recognized Firstmate call whose outcome matches. A named operation still matches only that call.
 
+## Wake records
+
+Besides the one `event` per recognized `fm-*` call, the observer writes derived records for the wake learner. Each has its own `type` in `events.jsonl` and is kept write-once under its own directory in the queue (`<queue>/<type>/<id>.json`), never in `events/`, so a consumer that reads every `events/*.json` for normalized calls sees exactly the files it always did. Every record is additive: nothing about an `event` changes, and the rules engine, the status tail and the poller never read these records.
+
+All text in these records is scrubbed (API keys and tokens, `Bearer`/`Basic` credentials, URL passwords, the values of keys named like credentials, device and user codes, PEM blocks, opaque 32+ character tokens) and capped at 400 characters; the user's home directory is rewritten to `~`. They observe only: nothing here blocks, rewrites or changes a command, acknowledges or drains a wake queue, or writes inside a Firstmate home.
+
+### `wake-drain`
+
+On a successful `fm-wake-drain.sh` call that is not an acknowledgement (no `--ack-through`), the observer writes `<queue>/wake-drain/<correlationId>.json` and appends the same record to `events.jsonl`. The `correlationId` is the drain event's, so a join needs nothing new. The harness usually pipes a drain through `head`/`grep` before the hook runs, so the record is rebuilt from the wake queue store the drain read, not from the (often fragmentary) `tool_response`. The store is `$FM_HOME/state` (`FM_HOME`, else the `.../fm_home/<name>` directory the call's working directory sits in) and is only ever read:
+
+```json
+{"type":"wake-drain","operation":"fm-wake-drain.sh","correlationId":"<the drain call's>","harness":"claude-code","sessionId":"…","callId":"toolu_…",
+ "ackThrough":4238,"recoveryGeneration":"7056.1792655096.m0nGWX",
+ "rows":[{"epoch":1792019075,"seq":3414,"kind":"check","name":"startup-network","text":"check: …"}],"rowsSource":"claim",
+ "annotation":{"task":"…","state":"needs-decision","at":1792659853,"key":"nm-…","text":"…"},
+ "branchOutcomes":[{"seq":1180,"recordedMinutesAgo":2,"task":"…","text":"…"}],
+ "openDecisions":["task [key=k] needs-decision: …"],"openDecisionsSource":"output","finishedAt":"…"}
+```
+
+- `rows`: the rows the drain presented, from `.wake-queue` limited to `.main-eligible-rows` (`rowsSource: "claim"`; `"queue"` when no claim file exists; `"unavailable"` with `rows: []` when the home cannot be resolved or the store cannot be read), deduped the way the drain dedupes (a repeated kind+key keeps the newest, every heartbeat is one) and cut at `ackThrough`. `name` is the row's key, `text` its payload.
+- `ackThrough`, `recoveryGeneration`: from the `WAKE_ACK_REQUIRED` line when any of stdout, stderr or the OpenCode output carries it; otherwise the highest presented row and the `.watcher-down` marker's generation.
+- `annotation`: the newest status line of the task named by the newest `signal` row. It is that status file's last line at observation time, not the drain's unread-lines annotation.
+- `branchOutcomes`: the unprocessed captain outcomes (`verdict: captain`, not silent, after `.branch-outcomes-processed` and up to `.branch-outcomes-cursor`), at most 20.
+- `openDecisions`: the `OPEN DECISIONS` lines of the drain's output. They are folded from the status logs by the drain itself, so a piped drain that lost them records `[]` with `openDecisionsSource: "unavailable"`.
+
+The record is derived data and best effort: a missing, unreadable or racing store yields a record with the fields that could be read, and a failure to write it is logged to stderr and never fails the observation of the drain. A repeated delivery keeps the first file and appends to the log again, like an event.
+
 ## Validation
 
 ```sh

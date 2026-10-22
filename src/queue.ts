@@ -60,6 +60,20 @@ export async function persistEvent(event, root = queueRoot()) {
   return path;
 }
 
+// A record that is not a recognized Firstmate call (a wake-drain, a turn-end, ...) is kept
+// write-once under its own directory, never in events/, so a consumer that reads every
+// events/*.json for normalized calls sees exactly the files it always did. The log line is
+// appended on every delivery, like an event's, and carries the record's own `type`.
+export async function persistRecord(kind, id, record, root = queueRoot()) {
+  await ensureQueue(root);
+  const directory = join(root, kind);
+  await mkdir(directory, { recursive: true });
+  const path = join(directory, `${safe(id)}.json`);
+  await writeOnce(path, record);
+  await appendEventLog(record, root);
+  return path;
+}
+
 export async function enqueueAction(event, rule, action, root = queueRoot()) {
   await ensureQueue(root);
   const jobs = join(root, 'jobs');
