@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveFmHome, stateDirOf } from './fm-home.ts';
@@ -42,7 +43,8 @@ export function parseDrainOutput(text: string) {
 async function readTail(path: string, bytes: number): Promise<string | null> {
   let handle;
   try {
-    handle = await open(path, 'r');
+    // O_NOFOLLOW, like the drain's own reads: a symlink planted in the state directory is not followed.
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const { size } = await handle.stat();
     const length = Math.min(size, bytes);
     const buffer = Buffer.alloc(length);

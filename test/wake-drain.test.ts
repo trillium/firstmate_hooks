@@ -194,6 +194,17 @@ test('an unreadable store never fails the observation of the drain', async () =>
   assert.equal(record.rowsSource, 'unavailable');
 }));
 
+test('a status file that is a symlink is not followed', async () => fixture(async ({ home, queue, env, state, dir }) => {
+  const { symlink } = await import('node:fs/promises');
+  await writeFile(join(dir, 'outside.txt'), 'working [at=1]: from outside the home\n');
+  await rm(join(state, 'brain-registry.status'));
+  await symlink(join(dir, 'outside.txt'), join(state, 'brain-registry.status'));
+  const [{ event }] = await observe(call(home), { root: queue, rules: [], env, now: 1792659900 });
+  const record = await readJson(join(queue, 'wake-drain', `${event.correlationId}.json`));
+  assert.equal(record.annotation?.task, 'gnhf-a11y-2', 'falls back to the next signalling task with a readable status file');
+  assert.ok(!JSON.stringify(record).includes('from outside the home'));
+}));
+
 test('stderr and OpenCode output are searched for the cutoff too', async () => fixture(async ({ home, queue, env }) => {
   const line = 'WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 4238 --recovery-generation 12.34.zz';
   const a = await observe(call(home, { callId: 'a', resultMetadata: { stdout: '', stderr: line } }), { root: queue, rules: [], env });
