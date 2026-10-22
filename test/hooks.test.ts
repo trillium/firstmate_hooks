@@ -138,7 +138,7 @@ test('Pi completion adapter persists shared semantic events without touching too
   try {
     const handlers = new Map();
     fmHooksPiExtension({ on: (name, handler) => handlers.set(name, handler) });
-    assert.deepEqual([...handlers.keys()], ['tool_execution_start', 'tool_execution_end']);
+    assert.deepEqual([...handlers.keys()], ['tool_execution_start', 'tool_execution_end', 'agent_settled']);
     const command = "fm_dispatch 'fixture task' && fm_scout fixture-project";
     const args = Object.freeze({ command });
     const start = Object.freeze({ toolCallId: 'pi-c1', toolName: 'bash', args });

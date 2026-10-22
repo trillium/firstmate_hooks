@@ -39,6 +39,13 @@ Observer state never lands in the directory an agent happens to run in. Queue fi
 
 An earlier version defaulted to the relative path `.fm-hooks/queue`, so repositories an agent ran in may still contain one. On the first run against the default queue, fm-hooks adopts such a legacy directory: it copies the events, the JSONL log, and the worker outcome records into `<queue>/migrated/<repo-key>/`, re-queues any pending jobs into `<queue>/jobs`, writes a `MIGRATED.json` marker, and prints a one-time notice on stderr naming both locations. It never moves, deletes, or creates anything inside the repository, and the legacy directory is left in place for the operator to delete. Adoption is per legacy directory and is idempotent, and an explicit `FM_HOOK_QUEUE` adopts nothing because the operator then owns the layout.
 
+### Retention: the system of record
+
+Two stores hold the same observations and they are not equivalent. A consumer that must see every observation, such as a backfill, reads the first.
+
+- **System of record: the write-once files.** `events/<correlationId>-<operation>.json` holds each recognized `fm-*` call once, from its first observation, and `wake-drain/`, `turn-end/` and any later per-type directory hold the derived records the same way. Nothing prunes them: they grow without bound (about 2,800 event files in the first two weeks on mini0), and removing old ones is the operator's decision. Each file carries its `seq`, so order is recoverable from the files alone.
+- **Bounded feed: `events.jsonl`.** The ordered stream a tail follows. It also holds what has no file (`seen` lines for non-matching Bash calls, `worker` lines) and every repeated delivery, and it rolls at `FM_HOOK_EVENT_LOG_MAX_BYTES` (default 5 MiB) keeping `FM_HOOK_EVENT_LOG_KEEP` rolls, roughly 20 MiB in all with the defaults. Rotation drops old log lines and nothing else; the files above are untouched. A reader that falls behind by more than the retained rolls cannot recover from the log and must backfill from the files, using `seq` to resume.
+
 ### Supervising the worker
 
 Rules do not fire because a hook ran; they fire because something drains the queue. Observation and execution are deliberately separate processes — the hook must stay inside the tool's latency budget, and a queued action must not be able to fail a completed Firstmate call — which means **the entire rule-evaluation half of fm-hooks is inert unless a worker is running.** This is not a theoretical risk: the repository shipped a worker that drained the queue once and exited, there was nothing to supervise, nothing supervised it, and no `jobs/`, `done/`, or `failed/` directory was ever created on a live queue. A correct-looking worker and a working observation log are not evidence that rules fire.
@@ -82,24 +89,33 @@ The worker passes `FM_HOOK_CORRELATION_ID` and `FM_HOOK_IDEMPOTENCY_KEY` to the 
 
 ### Claude Code
 
-Add these hooks to the applicable Claude settings file; merge with existing hooks rather than replacing them. Register only post events—no `PreToolUse` behavior is needed:
+Add these hooks to the applicable Claude settings file; merge with existing hooks rather than replacing them. `<hook>` stands for the same command each time: `FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_MACHINE=<name> /Users/trilliumsmith/.bun/bin/bun /absolute/path/fm-hooks/src/claude-hook.ts` (`FM_HOOK_RULES` too, where rules are used).
 
 ```json
 {
   "hooks": {
-    "PostToolUse": [{
-      "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_RULES=/absolute/path/fm-hooks.rules.json /Users/trilliumsmith/.bun/bin/bun /absolute/path/fm-hooks/src/claude-hook.ts" }]
-    }],
-    "PostToolUseFailure": [{
-      "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "FM_HOOK_QUEUE=/absolute/path/queue FM_HOOK_RULES=/absolute/path/fm-hooks.rules.json /Users/trilliumsmith/.bun/bin/bun /absolute/path/fm-hooks/src/claude-hook.ts" }]
-    }]
+    "PostToolUse": [{ "matcher": "Bash|Write|Edit|NotebookEdit|Agent|SendMessage", "hooks": [{ "type": "command", "command": "<hook>" }] }],
+    "PostToolUseFailure": [{ "matcher": "Bash|Write|Edit|NotebookEdit|Agent|SendMessage", "hooks": [{ "type": "command", "command": "<hook>" }] }],
+    "PreToolUse": [{ "matcher": "Bash|Write|Edit|NotebookEdit|Agent|SendMessage", "hooks": [{ "type": "command", "command": "<hook>" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "<hook>" }] }]
   }
 }
 ```
 
-The adapter observes only Bash and only post-success/post-failure. Claude's Bash input is a shell command string, not argv; args in normalized events are a conservative tokenization and `rawCommand` is authoritative. If the lifecycle event does not supply a call ID, the deterministic fallback key collapses identical commands in the same session.
+Only the first two are needed for the original behaviour (`fm-*` calls in Bash). Each extra registration adds one record type and nothing else:
+
+| Hook | Records | Without it |
+|---|---|---|
+| `PostToolUse` / `PostToolUseFailure`, matcher `Bash` | the `fm-*` events and `seen` lines | no `fm-*` events |
+| the same, for `Write\|Edit\|NotebookEdit\|Agent\|SendMessage` | [`tool:<Name>` events](#state-changing-tools-toolname) | no tool events |
+| `PreToolUse` | `startedAt` and `durationMs` on the post events (see below) | both stay `null` |
+| `Stop` | [`turn-end`](#turn-end) and [`wake-notice`](#wake-notice) records | neither is written |
+
+Every one of these hooks only observes. None prints anything, none exits non-zero, and none can block, rewrite or continue a tool call or a stop. `PreToolUse` runs before the tool, so it adds one process start (tens of milliseconds) in front of each recorded call, which is why it is optional: it records a timestamp for a call only when the post hook will record that call (an `fm-*` Bash call or one of the tools above), and nothing for any other.
+
+**Timing and exit codes.** Claude's payloads carry no start time or duration. With `PreToolUse` registered, the hook stores a timestamp per `tool_use_id` in `<queue>/pre/` (an id and a time, never the command), the post hook for that id turns it into `startedAt` and `durationMs` (the time between the two hooks, including their start-up) and removes it, and a timestamp whose post event never came is swept after six hours. `exitCode` was `null` for every Claude Bash event; a failed call now carries the code the harness prints on the first line of its error (`Exit code 7`). A success still has `exitCode: null`, because the harness also counts some non-zero codes as success (a `grep` that matches nothing) and the observer does not invent a 0. A piped call reports the status of the pipe, which is the status the harness saw. One consumer reads `startedAt`: the fleet bead's task resolution widens its record-in-the-call-window search to the call's real duration when a start time is present (OpenCode and Pi events already carry one), so with `PreToolUse` registered a long `fm-spawn.sh` call looks for records written anywhere in its run rather than only around its end.
+
+Claude's Bash input is a shell command string, not argv; args in normalized events are a conservative tokenization and `rawCommand` is authoritative. If the lifecycle event does not supply a call ID, the deterministic fallback key collapses identical commands in the same session.
 
 ### OpenCode
 
@@ -191,7 +207,79 @@ Compatibility verification covers OpenCode command discovery (`opencode debug co
 
 Each recognized event contains `operation`, tokenized `args`, exact `rawCommand`, `cwd`, optional `project`, `harness`, `sessionId`, `callId`, deterministic `correlationId`, `outcome` (`success`, `failure`, or `unknown`), optional `exitCode`, start/finish timestamps, duration when available, result metadata, and adapter source. Unknown is distinct and cannot satisfy success-only rules. Claude success/failure lifecycle event names provide the outcome class; a numeric exit code is retained only if present. OpenCode reports success/failure only for explicit metadata as above.
 
+### Order and origin
+
+Every record fm-hooks writes (an `event`, `seen`, `worker`, `wake-drain` or `turn-end` line in `events.jsonl`, and the write-once file behind it) carries four more fields, so a consumer no longer orders by millisecond `finishedAt` or guesses the home from `cwd`:
+
+| Field | Meaning |
+|---|---|
+| `seq` | A per-queue counter that only goes up, allocated under a lock in `<queue>/seq/` so concurrent hook processes never share one. It continues across `events.jsonl` rotation. An event's file keeps the `seq` of its first observation; every repeated delivery logs a `seq` of its own. `null` when the lock could not be taken within `FM_HOOK_SEQ_LOCK_TIMEOUT_MS` (default 2000): the record is written unordered rather than lost or held behind a stuck owner. A counter that cannot be read restarts from the clock in milliseconds, above any earlier count. |
+| `fmHome` | The Firstmate home the record belongs to, with the user's home directory written as `~`: `FM_HOME` when the harness passes it through, else the `.../fm_home/<name>` directory of the call's working directory, else one the command names (`H=/…/fm_home/x; $H/bin/…`); `null` when none resolves. |
+| `machine` | `FM_HOOK_MACHINE` when set (set it per machine in the hook command, for example `mini0` or `macbook`), else the short lower-case host name. |
+| `schemaVersion` | `2`. A record without the field was written before these fields existed (version 1). |
+
 A call is a Firstmate call when its command basename matches `/^fm[-_][A-Za-z0-9_.-]+$/`. That covers `fm-spawn.sh`, `bin/fm-send.sh`, and `fm_dispatch` alike. It is not a list of approved names. The command word must be the call itself, optionally after a path, preceding environment assignments, or a compound-command lead (`do`, `then`, `if`, `while`, `{`), at a shell command-list segment start. A script passed to `bash -c` (or `sh`/`dash`/`ksh`/`zsh -c`, including flag clusters such as `-lc`) is parsed by the same rules one quoting level down, so `bash -c 'for t in a b; do fm-spawn.sh "$t"; done'` is a call to `fm-spawn.sh`; a spawn loop that prints several `spawned <task>` lines records every task. Echoed text, comments, substrings, and names that merely contain `fm` do not match. This is not a shell parser; heredocs, command substitution, functions, aliases, interactive shells, scripts running outside harness tool events, and non-Bash tools are unsupported. Aliases and shell-resolved names are not recognized. A rule with `"operation": "*"` runs after any recognized Firstmate call whose outcome matches. A named operation still matches only that call.
+
+## Wake records
+
+Besides the one `event` per recognized `fm-*` call, the observer writes derived records for the wake learner. Each has its own `type` in `events.jsonl` and is kept write-once under its own directory in the queue (`<queue>/<type>/<id>.json`), never in `events/`, so a consumer that reads every `events/*.json` for normalized calls sees exactly the files it always did. Every record is additive: nothing about an `event` changes, and the rules engine, the status tail and the poller never read these records.
+
+All text in these records is scrubbed (API keys and tokens, `Bearer`/`Basic` credentials, URL passwords, the values of keys named like credentials, device and user codes, PEM blocks, opaque 32+ character tokens) and capped at 400 characters; the user's home directory is rewritten to `~`. The redactor is conservative, not exhaustive: it knows the shapes above and credential-named keys and flags, not every possible secret. They observe only: nothing here blocks, rewrites or changes a command, acknowledges or drains a wake queue, or writes inside a Firstmate home.
+
+### `wake-drain`
+
+On a successful `fm-wake-drain.sh` call that is not an acknowledgement (no `--ack-through`), the observer writes `<queue>/wake-drain/<correlationId>.json` and appends the same record to `events.jsonl`. The `correlationId` is the drain event's, so a join needs nothing new. The harness usually pipes a drain through `head`/`grep` before the hook runs, so the record is rebuilt from the wake queue store the drain read, not from the (often fragmentary) `tool_response`. The store is `$FM_HOME/state` (`FM_HOME`, else the `.../fm_home/<name>` directory the call's working directory sits in) and is only ever read:
+
+```json
+{"type":"wake-drain","operation":"fm-wake-drain.sh","correlationId":"<the drain call's>","harness":"claude-code","sessionId":"…","callId":"toolu_…",
+ "ackThrough":4238,"recoveryGeneration":"7056.1792655096.m0nGWX",
+ "rows":[{"epoch":1792019075,"seq":3414,"kind":"check","name":"startup-network","text":"check: …"}],"rowsSource":"claim",
+ "annotation":{"task":"…","state":"needs-decision","at":1792659853,"key":"nm-…","text":"…"},
+ "branchOutcomes":[{"seq":1180,"recordedMinutesAgo":2,"task":"…","text":"…"}],
+ "openDecisions":["task [key=k] needs-decision: …"],"openDecisionsSource":"output","finishedAt":"…"}
+```
+
+- `rows`: the rows the drain presented, from `.wake-queue` limited to `.main-eligible-rows` (`rowsSource: "claim"`). With no claim file the whole queue minus the rows `.branch-eligible-rows` grants to the supervision branch is a guess (`"queue"`) and names no ack cutoff of its own. `"held"` with `rows: []` when the output says every row is held by the supervision branch, and `"unavailable"` with `rows: []` when the home cannot be resolved or the store cannot be read. Rows are deduped the way the drain dedupes (a repeated kind+key keeps the newest, every heartbeat is one) and cut at `ackThrough`. `name` is the row's key, `text` its payload.
+- `ackThrough`, `recoveryGeneration`: from the `WAKE_ACK_REQUIRED` line when any of stdout, stderr or the OpenCode output carries it; otherwise the highest presented row and the `.watcher-down` marker's generation.
+- `annotation`: the newest status line of the task named by the newest `signal` row. It is that status file's last line at observation time, not the drain's unread-lines annotation.
+- `branchOutcomes`: the store's unprocessed captain outcomes (`verdict: captain`, not silent, after `.branch-outcomes-processed`, a missing mark meaning none processed, and up to `.branch-outcomes-cursor`), collapsed like the drain to one entry per task (its newest row, with a `count`), at most 20. `branchOutcomesPresented` is `true` when the drain's own output shows the section and `null` when it was filtered away: the list is then the store's, not proof the drain printed it (the drain also gates the section on the supervision host and away state, which the observer does not replicate).
+- `openDecisions`: the `OPEN DECISIONS` lines of the drain's output. They are folded from the status logs by the drain itself, so a piped drain that lost them records `[]` with `openDecisionsSource: "unavailable"`.
+
+The record is derived data and best effort: a missing, unreadable or racing store yields a record with the fields that could be read, and a failure to write it is logged to stderr and never fails the observation of the drain. A repeated delivery keeps the first file and appends to the log again, like an event.
+
+### `turn-end`
+
+The boundary that closes a handling turn, written to `<queue>/turn-end/<turnId>.json` and `events.jsonl`:
+
+```json
+{"type":"turn-end","harness":"claude-code","sessionId":"…","turnId":"<sha256 of session + transcript size>","finishedAt":"…",
+ "drainCallIds":["toolu_…"],"toolCallCount":6,"lastAssistantMessage":"<first 400 chars, scrubbed>","transcriptPath":"~/.claude/projects/…/<session>.jsonl","stopHookActive":false}
+```
+
+- **Claude Code** records it from the `Stop` hook (register `claude-hook.ts` for `Stop`, see [Claude Code](#claude-code)). The hook prints nothing and exits 0, so it neither blocks the stop nor continues the turn, whatever else is registered for `Stop`. `turnId` hashes the session and the transcript's byte size at the stop, so a replayed delivery of the same stop is the same turn. `drainCallIds` are the `tool_use` ids of the `fm-wake-drain.sh` Bash calls (drains and acknowledgements) after the last prompt, in order, and `toolCallCount` counts every tool call after it, sub-agents' own excluded; both come from the tail (last 4 MiB) of the transcript, which is only read. `lastAssistantMessage` is the payload's `last_assistant_message`, else the last assistant text of the turn. `transcriptPath` keeps the join key with the home directory written as `~`: expand it with the same machine's home.
+- **OpenCode** records it on the `session.idle` event, **Pi** on `agent_settled`. Neither exposes a transcript the observer may read, so the adapter counts the turn's tool calls as they complete: `drainCallIds` and `toolCallCount` are filled, `lastAssistantMessage` and `transcriptPath` are `null`, and `turnId` hashes the session, the adapter's start time and the turn's ordinal.
+
+### `wake-notice`
+
+The text of the wake the firstmate was shown, written to `<queue>/wake-notice/<noticeId>.json` and `events.jsonl`:
+
+```json
+{"type":"wake-notice","harness":"claude-code","sessionId":"…","noticeId":"<sha256>","turnId":"<the turn it opened>","finishedAt":"<when the harness delivered it>","body":"firstmate watcher wake - one supervision event needs a handling turn now.\ncheck: …","source":"transcript"}
+```
+
+A Stop-hook wake reaches the session as a queued `<task-notification>` that opens the handling turn. It is recorded by the `Stop` hook that closes that turn (the same delivery that writes the [`turn-end`](#turn-end)), from the turn's opening prompt in the transcript, when that prompt is a task notification carrying a Stop-hook blocking error from the firstmate watcher; a turn opened by anything else records none. `UserPromptSubmit` is deliberately not used: a queued notification is not a typed prompt, and the transcript is where the delivered text is known to be. `finishedAt` is the delivery time the transcript recorded, not the time the turn ended, and the notice therefore reaches the queue when its turn ends, not when the wake arrives. The id is the transcript entry's own id, so a wake seen by several Stops (a Stop-hook continuation) is one notice and two wakes with identical text are two. The body has its markup tags removed, keeps its line breaks, is scrubbed, and is capped at 1000 characters.
+
+### State-changing tools (`tool:<Name>`)
+
+`Write`, `Edit`, `NotebookEdit`, `Agent` and `SendMessage` are actions a firstmate takes without an `fm-*` call. Register the hook for them (`PostToolUse` and `PostToolUseFailure`, matcher `Write|Edit|NotebookEdit|Agent|SendMessage`) and each completed call becomes an ordinary `event` in `events/` and `events.jsonl`:
+
+```json
+{"type":"event","operation":"tool:Write","args":[],"rawCommand":"Write ~/code/a.ts","outcome":"success","harness":"claude-code","sessionId":"…","callId":"toolu_…","correlationId":"…","exitCode":null,"resultMetadata":null,"source":{"eventName":"PostToolUse","tool":"Write"}}
+```
+
+`rawCommand` names the target and never the content: the file path (`Write`, `Edit`, `NotebookEdit`), the sub-agent type and its short description (`Agent`), or the recipient (`SendMessage`). What was written, the edit's old and new text, an agent's prompt, a message body and the tool's response or error are not read into the record. The line and the working directory are scrubbed, and the line is capped at 400 characters.
+
+These events are persisted and logged but never evaluated against the rules: a rule with `"operation": "*"` means any recognized Firstmate call, and an edit is not one, so a wildcard rule such as `fm-ledger-timeline` does not fire on them.
 
 ## Validation
 
