@@ -97,6 +97,29 @@ test('scout done creates one brain bead, links fleet and backlog beads, files ca
   assert.ok(again.reviews.every(r => r.wrote === false));
   assert.equal((await writes()).length, before, 're-delivery must not write');
 }, { stores: STORES }));
+test('captainCalls drops a section answer that says there is no call, and keeps real calls', () => {
+  const section = (body: string) => `# R\n\n## Captain-owned open calls\n${body}\n\n## Next\nx\n`;
+  assert.deepEqual(captainCalls(section('None.')), []);
+  assert.deepEqual(captainCalls(section('**None.** The only action is a fact lookup.')), []);
+  assert.deepEqual(captainCalls(section('None - the only action is a fact lookup.')), []);
+  assert.deepEqual(captainCalls(section('- None.')), []);
+  assert.deepEqual(captainCalls(section('No captain calls.')), []);
+  assert.deepEqual(captainCalls(section('N/A')), []);
+  assert.deepEqual(captainCalls(section('Not applicable.')), []);
+  assert.deepEqual(captainCalls('# R\nCaptain call: none\n'), []);
+  assert.deepEqual(captainCalls(section('1. Drop the old databases.\n\nNone of these are destructive.')), ['Drop the old databases.']);
+  assert.deepEqual(captainCalls(section('1. Drop the old databases.\nNone of these are destructive.')), ['Drop the old databases.']);
+  assert.deepEqual(captainCalls(section('Pick one; none of the options is free.')), ['Pick one; none of the options is free.']);
+});
+
+test('a report whose calls section says None files no review bead and records captain calls: 0', async () => withStubs(async ({ env, db }) => {
+  const event = await scoutEvent(env, { report: '# Credits audit\n\nFindings.\n\n## Captain-owned open calls\n\nNone. The only action needed is the balance check in step 1, which is a fact lookup, not a decision.\n' });
+  const result = await act(event, env);
+  assert.deepEqual(result.reviews, []);
+  const state = await db();
+  assert.match(state.brain.beads['brain-fmhscout-demo-scout'].description, /captain calls: 0$/);
+  assert.equal(state.review, undefined);
+}, { stores: STORES }));
 
 test('a done line with no report is not a scout: visible skip, no writes', async () => withStubs(async ({ env, writes }) => {
   const event = await scoutEvent(env, { task: 'ship-task', report: null });

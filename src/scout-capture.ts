@@ -36,6 +36,10 @@ const DONE_LINE = /echo\s+(["'])done \[at=[^\]]*\]:\s*([\s\S]*?)\1\s*>>\s*(["']?
 const CALL_HEADING = /^#{1,6}\s+.*\bcaptain\b.*\b(calls?|decisions?|input|asks?|questions?)\b/i;
 const CALL_LINE = /^\W*(captain calls?|needs captain input|captain decides?|captain decision)\W*:?\s*(.+)$/i;
 
+// "None.", "No captain calls", "N/A", "Nothing needed": an answer that there is no call, not one.
+const NEGATION = /^(?:none|nothing)\b|^no(?:\s|[.,;:!]|$)|^n\/a\b|^not applicable\b/i;
+const isNegation = (text: string) => NEGATION.test(text.replace(/[*_`]/g, '').replace(/^[^\p{L}\p{N}]+/u, ''));
+
 export const scoutBeadId = (task: string) => `brain-fmhscout-${slug(task)}`;
 
 export function scoutDone(event: any) {
@@ -51,7 +55,7 @@ export function scoutDone(event: any) {
 export function captainCalls(report: string): string[] {
   const calls: string[] = [];
   let inSection = false, level = 0, paragraph: string[] = [];
-  const flush = () => { if (paragraph.length) calls.push(paragraph.join(' ')); paragraph = []; };
+  const flush = () => { if (paragraph.length && !isNegation(paragraph[0])) calls.push(paragraph.join(' ')); paragraph = []; };
   for (const raw of report.split('\n')) {
     const heading = /^(#{1,6})\s/.exec(raw);
     if (heading) {
@@ -61,13 +65,13 @@ export function captainCalls(report: string): string[] {
     }
     if (inSection) {
       const item = /^\s*(?:[-*]|\d+[.)])\s+(.*)$/.exec(raw);
-      if (item) { flush(); paragraph = [item[1].trim()]; } else if (raw.trim() && paragraph.length) paragraph.push(raw.trim());
+      if (item) { flush(); paragraph = [item[1].trim()]; } else if (raw.trim() && paragraph.length) { if (!isNegation(raw)) paragraph.push(raw.trim()); }
       else if (raw.trim()) paragraph = [raw.trim()];
       else flush();
       continue;
     }
     const line = CALL_LINE.exec(raw.replace(/\*\*/g, '').trim());
-    if (line && line[2]) calls.push(line[2].trim());
+    if (line && line[2] && !isNegation(line[2])) calls.push(line[2].trim());
   }
   flush();
   return [...new Set(calls.map(call => call.replace(/\*\*/g, '').trim()).filter(Boolean))];
