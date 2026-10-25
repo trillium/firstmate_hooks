@@ -1,0 +1,7 @@
+{
+  "01-real-pass.txt": "pass",
+  "02-real-pass.json": "pass",
+  "03-derived-fail.txt": "fail",
+  "04-derived-pending.txt": "pending",
+  "05-real-none-reported.txt": "other"
+}

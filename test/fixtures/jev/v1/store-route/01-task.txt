@@ -1,0 +1,2 @@
+Add a retry with backoff to the bead poller
+The poller gives up after one failed Dolt connection. Wrap the connect call in a three-attempt retry with a short backoff, add a test that stubs two failures then a success, and open a PR this week.

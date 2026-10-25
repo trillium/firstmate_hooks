@@ -1,0 +1,2 @@
+How the federated bead stores share one Dolt server
+Every store is its own database on a single Dolt SQL server on port 3307. The per-store directory only holds config and hooks; the data lives in the server. Each store owns an id prefix, so an id tells you which database it came from.

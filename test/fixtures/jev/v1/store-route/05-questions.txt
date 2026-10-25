@@ -1,0 +1,2 @@
+Does the status API return a retry-after header when it rate limits?
+I could not find this in the docs. Someone who has hit the limit should say what the response looks like so the client can back off correctly.

@@ -1,0 +1,2 @@
+working [at=1792917955]: 8 of 12 fixes picked (watch-cap, spawn, teardown, doctor etc.); skipped <id> per brief; <id>/<id> duplicate home <id>; running tests
+paused [at=1792918089]: running 30 test files in background; resumes when results.txt shows ALLDONE

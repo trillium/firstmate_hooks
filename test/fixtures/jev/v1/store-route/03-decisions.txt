@@ -1,0 +1,2 @@
+Chose an append-only JSONL file for the eval log instead of SQLite
+We picked JSONL because outcomes arrive later and an appended line never rewrites an earlier answer. SQLite would need updates, which loses the original record. Decided on 2026-10-25.

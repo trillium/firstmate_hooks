@@ -1,0 +1,2 @@
+working [at=1792904537]: deepgram engine implemented + tests passing (44, network stubbed); pushing PR
+done [at=1792904568]: PR <url> (draft: no; 44 stubbed tests pass; NO live Deepgram synthesis - no key provisioned)

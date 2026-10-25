@@ -1,0 +1,8 @@
+{
+  "01-scout-finished.txt": "done",
+  "02-opencode-funds.txt": "stuck",
+  "03-tests-running.txt": "in-progress",
+  "04-rebase-blocked.txt": "stuck",
+  "05-pr-opened.txt": "done",
+  "06-waiting-on-fix-round.txt": "in-progress"
+}
