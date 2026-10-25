@@ -47,4 +47,24 @@ Env: `JEV_BIG_MODEL` (default `claude-sonnet-5-5`), plus the existing `JEV_EVAL_
 
 Eval log: each `decide` appends one `kind: "cascade"` line (`request_id`, `pack`, `layer`, `jev_confidence`, `big_confidence`, `irreversible`, `destructive`, `human_id`). `answerLine` and `recordOutcome` take an optional `layer` (default `jev`).
 
-Not wired into any firstmate hook yet.
+
+## Shadow mode
+
+The status tail (`src/status-tail.ts`) can ask the `worker-status` pack about every status line it records while the existing regex keeps deciding. Jev's answer is logged and used for nothing: the fleet comment, `fm-state:` label, cursor and scout capture are identical with it on, off, slow, down or unkeyed.
+
+What runs, when `JEV_SHADOW=1` (default off): after `tailStatusOnce` records a line, `shadowLabel` (`shadow.ts`) calls `askPack(workerStatusPack, raw)` with `raw` = the status file's last up to 20 lines ending at that line. It appends `recordOutcome(requestId, 'worker-status/state', { source: 'shadow', existing, agree, jevVerdict, jevConfidence, latencyMs, estimatedTokens, model, floor })` on the same request id as the answer line. Any failure (no key, HTTP, network, too large, timeout) becomes one `kind: "shadow-error"` line with the error class name only (e.g. `JevKeyUnavailable`, `JevShadowTimeout`) and never reaches the tail.
+
+`existing` is the regex state mapped to the pack's answers (`EXISTING_FROM_STATE` in `shadow.ts`); `agree` is `jevVerdict === existing`, and `undecided` never agrees:
+
+| regex state | `existing` |
+| --- | --- |
+| `done`, `failed` | `done` |
+| `blocked` | `stuck` |
+| `working`, `paused`, `resolved` | `in-progress` |
+| `needs-decision` | `other` |
+
+Env: `JEV_SHADOW` (`1` turns it on), `JEV_SHADOW_TIMEOUT_MS` (per line, default 8000), `JEV_SHADOW_MAX_PER_CYCLE` (default 20; lines beyond the cap are skipped, not queued), `JEV_EVAL_LOG`. The poller plist passes these through when set. The key is read only through `keychain.ts`; if the launchd poller cannot reach the Keychain the log records `JevKeyUnavailable`. Calls are awaited one line at a time, so a slow Jev delays a poll cycle by at most `timeout x cap`.
+
+Reading the report: `bun src/jev/shadow-report.ts [--log <path>] [--since <ISO>] [--pack <id>] [--json]` joins answer lines to shadow outcomes by request id and prints, per pack and per Jev confidence band (`<0.5`, `0.5-0.6`, `0.6-0.9`, `>=0.9`): n, agree, disagree, undecided, agreement % (agree / n), p50/p95 latency, total and mean estimated tokens, then the shadow-error count by class. A high-agreement `>=0.9` band is the candidate for going automatic first (a separate step).
+
+Enabling `JEV_SHADOW=1` in the deployed poller is firstmate's step, not part of this change. `bun src/jev/shadow-sample.ts --home <FM_HOME> --last <N>` is a read-only live sample: it labels the last N parsed lines across `state/*.status` and writes only the eval log.
