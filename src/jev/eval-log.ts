@@ -27,7 +27,7 @@ export async function appendEvalLines(lines, path = evalLogPath()) {
 }
 
 // One line per answered question. `outcome` is null here and is recorded later.
-export const answerLine = ({ requestId, answer, model, threshold, latencyMs, at = new Date() }) => ({
+export const answerLine = ({ requestId, answer, model, threshold, latencyMs, at = new Date(), layer = LAYER }: any) => ({
   kind: 'answer',
   timestamp: at.toISOString(),
   request_id: requestId,
@@ -38,14 +38,28 @@ export const answerLine = ({ requestId, answer, model, threshold, latencyMs, at 
   chosen: answer.value,
   confidence: answer.confidence,
   threshold: threshold ?? null,
-  layer: LAYER,
+  layer,
   latency_ms: latencyMs,
   outcome: null,
 });
 
 // A separate appended line keyed by (request_id, question_id); earlier lines are never rewritten.
-export function recordOutcome(requestId, questionId, outcome, path = evalLogPath(), at = new Date()) {
+export function recordOutcome(requestId, questionId, outcome, path = evalLogPath(), at = new Date(), layer = LAYER) {
   return appendEvalLines([{
-    kind: 'outcome', timestamp: at.toISOString(), request_id: requestId, question_id: questionId, layer: LAYER, outcome,
+    kind: 'outcome', timestamp: at.toISOString(), request_id: requestId, question_id: questionId, layer, outcome,
   }], path);
 }
+
+// One line per cascade `decide` call: which layer decided and what each layer thought.
+export const cascadeLine = ({ requestId, packId, layer, jevConfidence = null, bigConfidence = null, irreversible = false, destructive = false, humanId = null, at = new Date() }: any) => ({
+  kind: 'cascade',
+  timestamp: at.toISOString(),
+  request_id: requestId,
+  pack: packId,
+  layer,
+  jev_confidence: jevConfidence,
+  big_confidence: bigConfidence,
+  irreversible,
+  destructive,
+  human_id: humanId,
+});
