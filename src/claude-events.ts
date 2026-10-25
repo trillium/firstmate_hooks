@@ -2,6 +2,8 @@ import { parseSemanticCommand } from './normalize.ts';
 import { observe } from './observer.ts';
 import { recordCallStart, takeCallStart, timingFrom } from './call-timing.ts';
 import { appendEventLog } from './queue.ts';
+import { queueShadowObservations } from './jev/pending.ts';
+import { queueRoot } from './paths.ts';
 import { observeToolCall, TOOL_NAMES } from './tool-events.ts';
 import { turnEndFromClaudeStop } from './turn-end.ts';
 
@@ -40,6 +42,9 @@ export async function handleClaudeHook(event, { eventName = event?.hook_event_na
   const command = event.tool_input?.command;
   if (typeof command !== 'string') return;
   if (!parseSemanticCommand(command).length) {
+    // Shadow only (JEV_SHADOW): a store capture or a gh-axi checks read is queued for Jev to
+    // label later; this writes a small file and never waits on a model call.
+    await queueShadowObservations({ command, response: event.tool_response, root: root ?? queueRoot() });
     await appendEventLog({ type: 'seen', matched: false, harness: 'claude-code', tool, rawCommand: command,
       sessionId: event.session_id ?? null, callId: event.tool_use_id ?? null }, root, { cwd: event.cwd, rawCommand: command });
     return;

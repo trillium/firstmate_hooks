@@ -48,6 +48,10 @@ Env: `JEV_BIG_MODEL` (default `claude-sonnet-5-5`), plus the existing `JEV_EVAL_
 Eval log: each `decide` appends one `kind: "cascade"` line (`request_id`, `pack`, `layer`, `jev_confidence`, `big_confidence`, `irreversible`, `destructive`, `human_id`). `answerLine` and `recordOutcome` take an optional `layer` (default `jev`).
 
 
+## Shadow mode: ci-rollup and store-route
+
+With `JEV_SHADOW=1` the same shadow log also collects labels for two more packs, observed from the Claude hook: `store-route` (a `<store> create|q|remember "title" [-d text]` Bash command; `existing` = that store) and `ci-rollup` (a `gh-axi pr view|checks` whose `tool_response` stdout carries a `checks: "N passed, M failed, K total"` summary or per-check lines; `existing` = fail if any failed, else pending if any pending/queued, else pass). Recognizers: `observe-store-route.ts`, `observe-ci-rollup.ts`. The hook never waits on Jev: it writes a small record under `<queue root>/jev-pending/` (`pending.ts`) and the poller drains it each cycle through `shadowGuarded` (same timeout, per-cycle cap and error line). Both packs are on whenever `JEV_SHADOW` is; `shadow-report` groups them by pack unchanged. Nothing reads the answers and neither pack is promotable.
+
 ## Shadow mode
 
 The status tail (`src/status-tail.ts`) can ask the `worker-status` pack about every status line it records while the existing regex keeps deciding. Jev's answer is logged and used for nothing: the fleet comment, `fm-state:` label, cursor and scout capture are identical with it on, off, slow, down or unkeyed.
