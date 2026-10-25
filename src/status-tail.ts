@@ -5,6 +5,9 @@ import { replaceJson } from './atomic.ts';
 import { clip } from './bead-actions.ts';
 import { fleetRecord, TASK_OK } from './fleet-beads.ts';
 import { captureScout } from './scout-capture.ts';
+import { EXISTING_FROM_STATE, shadowGuarded, shadowSettings, SHADOW_CONTEXT_LINES } from './jev/shadow.ts';
+import { evalLogPath } from './jev/eval-log.ts';
+import { workerStatusPack } from './jev/questions/v1.ts';
 
 // Crew status transitions -> fleet bead. A crew appends `state [at=<epoch>]: text` lines to
 // `$FM_HOME/state/<task>.status`; several writers feed that file (the crew itself, Firstmate,
@@ -21,6 +24,10 @@ import { captureScout } from './scout-capture.ts';
 // from here even when the hook never saw the status command. The capture's bead id is
 // deterministic, so the hook path and this one converge on one bead. A capture failure holds
 // the cursor at the line like any store failure; the fleet comment it repeats is deduplicated.
+//
+// Shadow mode (JEV_SHADOW=1, off by default; src/jev/README.md): after a line is recorded,
+// Jev's worker-status pack is asked about it and the pair is logged. The answer is not used
+// for anything here, and no failure or delay of the call changes what this tail writes.
 
 export const STATE_FROM_LINE = {
   working: 'working', 'needs-decision': 'needs-decision', blocked: 'blocked', paused: 'paused', done: 'done', failed: 'failed',
@@ -60,10 +67,13 @@ async function readLines(path, offset) {
     lines.push({ text: buffer.subarray(at, next).toString('utf8'), offset: at });
     at = next + 1;
   }
-  return { lines, offset: Math.max(offset, end) };
+  return { lines, offset: Math.max(offset, end), buffer };
 }
 
-export async function tailStatusOnce({ root, env = process.env, run, now = Date.now() }) {
+// The file's last up-to-20 lines ending at (and including) the line at `end`.
+const shadowContext = (buffer, end) => buffer.subarray(0, end).toString('utf8').split('\n').slice(-SHADOW_CONTEXT_LINES).join('\n');
+
+export async function tailStatusOnce({ root, env = process.env, run, now = Date.now(), shadowAsk }: Record<string, any>) {
   const home = env.FM_HOME;
   if (!home) return { skipped: 'FM_HOME is not set', recorded: [] };
   const stateDir = join(home, 'state');
@@ -73,6 +83,8 @@ export async function tailStatusOnce({ root, env = process.env, run, now = Date.
   const initial = previous === null;
   const cursor = {};
   const recorded = [], failed = [];
+  const shadow = shadowSettings(env);
+  let shadowed = 0;
   for (const name of names) {
     const task = name.slice(0, -'.status'.length);
     if (!TASK_OK.test(task)) continue;
@@ -86,7 +98,7 @@ export async function tailStatusOnce({ root, env = process.env, run, now = Date.
     if (seen && (info.size < seen.offset || info.ino !== seen.inode)) offset = 0;
     cursor[task] = { offset, inode: info.ino };
     if (info.size <= offset) continue;
-    const { lines, offset: next } = await readLines(path, offset);
+    const { lines, offset: next, buffer } = await readLines(path, offset);
     for (const line of lines) {
       const parsed = parseStatusLine(line.text);
       if (!parsed) { cursor[task].offset = line.offset + Buffer.byteLength(line.text) + 1; continue; }
@@ -100,6 +112,12 @@ export async function tailStatusOnce({ root, env = process.env, run, now = Date.
         if (parsed.state === 'done') entry.scout = await captureScout({ run, env, home, task, line: parsed.text });
         recorded.push(entry);
         cursor[task].offset = line.offset + Buffer.byteLength(line.text) + 1;
+        // Lines beyond the per-cycle cap are skipped, not queued.
+        if (shadow.enabled && shadowed < shadow.maxPerCycle) {
+          shadowed++;
+          await shadowGuarded({ pack: workerStatusPack, raw: shadowContext(buffer, line.offset + Buffer.byteLength(line.text)), existing: EXISTING_FROM_STATE[parsed.state],
+            ask: shadowAsk, evalLogPath: evalLogPath(env), timeoutMs: shadow.timeoutMs });
+        }
       } catch (error) {
         // Stop at the failed line so the next cycle retries it (and everything after it).
         failed.push({ task, error: clip(error.stderr?.toString() || error.message, 200) });
