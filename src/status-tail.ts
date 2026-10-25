@@ -7,6 +7,7 @@ import { fleetRecord, TASK_OK } from './fleet-beads.ts';
 import { captureScout } from './scout-capture.ts';
 import { EXISTING_FROM_STATE, shadowGuarded, shadowSettings, SHADOW_CONTEXT_LINES } from './jev/shadow.ts';
 import { evalLogPath } from './jev/eval-log.ts';
+import { askGuarded, logPromote, promoteDecision, promoteLine, promoteSettings, requestIdOf } from './jev/promote.ts';
 import { workerStatusPack } from './jev/questions/v1.ts';
 
 // Crew status transitions -> fleet bead. A crew appends `state [at=<epoch>]: text` lines to
@@ -28,6 +29,12 @@ import { workerStatusPack } from './jev/questions/v1.ts';
 // Shadow mode (JEV_SHADOW=1, off by default; src/jev/README.md): after a line is recorded,
 // Jev's worker-status pack is asked about it and the pair is logged. The answer is not used
 // for anything here, and no failure or delay of the call changes what this tail writes.
+//
+// Promotion (JEV_PROMOTE=worker-status:stuck, off by default; src/jev/README.md): the one place
+// Jev's answer is used. The pack is asked BEFORE the line is recorded (one call, shared with
+// shadow mode); a `stuck` verdict at confidence >= 0.9 over a working/paused/resolved line
+// records the fleet state as `blocked` with a comment suffix saying why. Every other case, and
+// every failure, records exactly what the regex path would have.
 
 export const STATE_FROM_LINE = {
   working: 'working', 'needs-decision': 'needs-decision', blocked: 'blocked', paused: 'paused', done: 'done', failed: 'failed',
@@ -84,6 +91,7 @@ export async function tailStatusOnce({ root, env = process.env, run, now = Date.
   const cursor = {};
   const recorded = [], failed = [];
   const shadow = shadowSettings(env);
+  const promote = promoteSettings(env);
   let shadowed = 0;
   for (const name of names) {
     const task = name.slice(0, -'.status'.length);
@@ -105,18 +113,28 @@ export async function tailStatusOnce({ root, env = process.env, run, now = Date.
       const correlationId = createHash('sha256').update(`${task}\0${line.offset}\0${line.text}`).digest('hex');
       const finishedAt = new Date(parsed.at ? parsed.at * 1000 : now).toISOString();
       try {
+        const raw = shadowContext(buffer, line.offset + Buffer.byteLength(line.text));
+        let asked, decision;
+        if (promote.enabled) {
+          asked = await askGuarded({ pack: workerStatusPack, raw, ask: shadowAsk, evalLogPath: evalLogPath(env), timeoutMs: shadow.timeoutMs });
+          decision = promoteDecision(asked, parsed.state);
+        }
         const result = await fleetRecord(run, env, { correlationId, finishedAt, harness: 'status', sessionId: task },
-          { task, state: STATE_FROM_LINE[parsed.state],
-            line: `status ${parsed.state}${parsed.key ? ` [key=${parsed.key}]` : ''}: ${clip(parsed.text, 300)}` });
+          { task, state: decision?.apply ? 'blocked' : STATE_FROM_LINE[parsed.state],
+            line: `status ${parsed.state}${parsed.key ? ` [key=${parsed.key}]` : ''}: ${clip(parsed.text, 300)}${decision?.apply ? ` [jev: stuck ${decision.confidence}, promoted over ${parsed.state}]` : ''}` });
         const entry: Record<string, any> = { task, state: parsed.state, wrote: result.wrote };
         if (parsed.state === 'done') entry.scout = await captureScout({ run, env, home, task, line: parsed.text });
         recorded.push(entry);
+        if (decision) await logPromote(promoteLine({ requestId: requestIdOf(asked), packId: workerStatusPack.id, existing: parsed.state,
+          verdict: decision.verdict, confidence: decision.confidence, applied: decision.apply, reason: decision.reason }), evalLogPath(env));
         cursor[task].offset = line.offset + Buffer.byteLength(line.text) + 1;
         // Lines beyond the per-cycle cap are skipped, not queued.
         if (shadow.enabled && shadowed < shadow.maxPerCycle) {
           shadowed++;
-          await shadowGuarded({ pack: workerStatusPack, raw: shadowContext(buffer, line.offset + Buffer.byteLength(line.text)), existing: EXISTING_FROM_STATE[parsed.state],
-            ask: shadowAsk, evalLogPath: evalLogPath(env), timeoutMs: shadow.timeoutMs });
+          // With promotion on, the answer (or failure) already fetched above is replayed, never re-asked.
+          const ask = asked ? async () => { if (asked.ok) return asked.result; throw asked.error; } : shadowAsk;
+          await shadowGuarded({ pack: workerStatusPack, raw, existing: EXISTING_FROM_STATE[parsed.state],
+            ask, evalLogPath: evalLogPath(env), timeoutMs: shadow.timeoutMs });
         }
       } catch (error) {
         // Stop at the failed line so the next cycle retries it (and everything after it).

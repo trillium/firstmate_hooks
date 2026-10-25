@@ -68,3 +68,17 @@ Env: `JEV_SHADOW` (`1` turns it on), `JEV_SHADOW_TIMEOUT_MS` (per line, default 
 Reading the report: `bun src/jev/shadow-report.ts [--log <path>] [--since <ISO>] [--pack <id>] [--json]` joins answer lines to shadow outcomes by request id and prints, per pack and per Jev confidence band (`<0.5`, `0.5-0.6`, `0.6-0.9`, `>=0.9`): n, agree, disagree, undecided, agreement % (agree / n), p50/p95 latency, total and mean estimated tokens, then the shadow-error count by class. A high-agreement `>=0.9` band is the candidate for going automatic first (a separate step).
 
 Enabling `JEV_SHADOW=1` in the deployed poller is firstmate's step, not part of this change. `bun src/jev/shadow-sample.ts --home <FM_HOME> --last <N>` is a read-only live sample: it labels the last N parsed lines across `state/*.status` and writes only the eval log.
+
+## Promotion
+
+The first decision that goes automatic, behind one flag: `stuck` from the `worker-status` pack. Everything else in the status tail is unchanged.
+
+Flag: env `JEV_PROMOTE=worker-status:stuck` (`promoteSettings` in `promote.ts`). Unset, empty or any other value is promotion off: the tail behaves exactly as without it, with no Jev call, no throw and no log line. The band is `PROMOTE_MIN_CONFIDENCE = 0.9` and is not configurable.
+
+Behavior, per parsed status line when on: the pack is asked once, before the fleet bead is written, with the same 20-line context, the same timeout (`JEV_SHADOW_TIMEOUT_MS`, default 8000) and the same never-throws guard as shadow mode. With `JEV_SHADOW=1` as well, that one answer is replayed for the shadow outcome line; Jev is never called twice for a line. The promotion applies only when all hold: Jev's verdict is `stuck`, its confidence is >= 0.9, and the regex state is `working`, `paused` or `resolved`. Then the fleet bead is recorded with state `blocked` (the `fm-state:` label moves to blocked) and the comment gains ` [jev: stuck <confidence>, promoted over <regex state>]`. In every other case (any other verdict, confidence below 0.9, regex state `done`/`failed`/`blocked`/`needs-decision`, undecided, timeout, no key, any error) the existing path runs untouched. Scout capture, the cursor and dedup do not change.
+
+Eval log: each call appends one `kind: "promote"` line on the answer's request id: `pack`, `existing` (the regex state), `jev_verdict`, `jev_confidence`, `applied`, and `reason` in `applied`, `not-stuck`, `below-band`, `state-not-promotable`, `unavailable`. The line is written after the line is recorded. `shadow-report.ts` prints a "promote" block (candidates, applied, reason counts) when such lines exist.
+
+The poller plist passes `JEV_PROMOTE` through when set. Deploying it is firstmate's step.
+
+Revert switch: remove the single `JEV_PROMOTE` line from the poller's environment and reload it. No code change.
