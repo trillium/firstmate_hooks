@@ -289,6 +289,14 @@ npm test
 
 Tests use harmless command strings and temporary directories only; they never invoke Firstmate or a configured action. The suite covers quoted args, command lists, false positives, equivalent Claude/OpenCode event normalization, unknown/failure outcome handling, the `fm_dispatch -> verification` and `fm_scout -> report review` rules, duplicate event delivery, durable job consumption, and action queue idempotency. A dedicated suite covers state-path resolution: that the default queue root is absolute and independent of the working directory, the override precedence chain, legacy-queue adoption and its idempotence, event-log rotation bounds, and an end-to-end run of the real adapters inside a scratch `git` repository asserting `git status --porcelain` is unchanged. A third suite covers the supervised worker: watch mode draining a queued rule action and asserting the action's own side effect on disk rather than the worker's opinion of it, a non-matching outcome enqueuing nothing, a never-run queue reporting dead, a running-but-silent worker reporting dead, supervisor restart counting, a live supervisor over a dead worker reporting not-live, a real resident `supervise` process draining a real queue end to end, CLI status exit codes, and the launchd plist's contents. For a live harness smoke test, use harmless fixture commands such as `printf marker`, `sh -c 'exit 7'`, and deliberately non-side-effecting `fm_dispatch`-shaped fixture text in a disposable configuration. Never run real task actions during adapter tests.
 
+## Answers page
+
+`bin/fm-hooks-answers-page.ts` renders one static page of what the captain asked and what came back, newest first:
+
+    bun bin/fm-hooks-answers-page.ts --out <file> [--home <FM_HOME>] [--index <index.html>]
+
+It reads three sources through their CLIs only: `review list --json --all` plus `review show` (captain calls labeled `human`: question, open/closed, latest comment), `status show status-kvo --json` (one entry per comment), and `<home>/bin/fm-inbox.sh receipts --all-handled --all-replies` (captain notes and firstmate replies, or "no reply recorded"). Open review items sort first within their day, and the page keeps the newest 200 entries with a note when it caps. `--home` defaults to `$FM_HOME` and the command refuses when neither is set. With `--index`, it adds an "Answers" card as the first card of the index unless a card already links `answers.html`. A missing or failing CLI exits non-zero with a plain message that never includes bead text. Tests inject the CLI runner, so no live store is touched.
+
 ## Jev harness
 
 `src/jev/` is a self-contained module for asking TypeSafe's Jev model several typed questions in one call and logging each decision to a JSONL eval log; see [src/jev/README.md](src/jev/README.md).
