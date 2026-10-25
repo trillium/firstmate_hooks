@@ -19,6 +19,8 @@ import { FLEET_STORE, fleetId } from './fleet-beads.ts';
 //
 // Writes, each safe to repeat (store state is the only memory, see bead-actions.ts):
 //   - one `brain` bead with a deterministic id per task: summary, report path, task id;
+//   - the full report text as one comment on that bead (capped, `[scout-report:<task>]`), so
+//     the finding is readable from the bead alone, not only from a path on one machine;
 //   - a cross-reference comment, once, on `fleet-<task>` and on the backlog task bead;
 //   - one `review` bead per captain call the report lists.
 
@@ -77,6 +79,8 @@ export function captainCalls(report: string): string[] {
   return [...new Set(calls.map(call => call.replace(/\*\*/g, '').trim()).filter(Boolean))];
 }
 
+export const REPORT_COMMENT_CAP = 60000;
+
 const reportTitle = (report: string) => /^#\s+(.+)$/m.exec(report)?.[1].trim() ?? null;
 
 // `- [ ] <task> - title (inbox-yas4) ...`: the bead the backlog line names, if any.
@@ -123,6 +127,22 @@ export async function captureScout({ run, env, home, task, line }: { run: Run, e
   links.fleet = link(fleetStore, fleet) ? 'linked' : exists(run, fleetStore, fleet) ? 'already' : 'missing';
   if (backlog) links.backlog = link(backlog.store, backlog.id) ? 'linked' : exists(run, backlog.store, backlog.id) ? 'already' : 'missing';
 
+  // The report body, once, on the brain bead (whether created now or already there).
+  const reportTag = `[scout-report:${task}]`;
+  let reportComment = 'skipped';
+  if (exists(run, 'brain', id)) {
+    const seen = JSON.parse(run('brain', ['comments', id, '--json']) || '[]')
+      .some(c => String(c.text ?? c.body ?? '').includes(reportTag));
+    if (seen) reportComment = 'already';
+    else {
+      const body = report.length > REPORT_COMMENT_CAP
+        ? `${report.slice(0, REPORT_COMMENT_CAP)}\n[truncated: ${REPORT_COMMENT_CAP} of ${report.length} characters; full report: ${reportPath}]`
+        : report;
+      run('brain', ['comments', 'add', id, `Scout report (${task}) - full text ${reportTag}\n\n${body}`]);
+      reportComment = 'written';
+    }
+  }
+
   const reviews = calls.map(call => {
     const reviewId = `review-fmhscout-${hex(`${task}\0${call}`, 8)}`;
     const created = createOnce(run, 'review', reviewId, {
@@ -131,7 +151,7 @@ export async function captureScout({ run, env, home, task, line }: { run: Run, e
       body: `${call}\n\nFrom scout ${task}'s report: ${reportPath}\nsummary bead: ${id}` });
     return { id: reviewId, wrote: created };
   });
-  return { target: id, wrote, links, reviews };
+  return { target: id, wrote, links, reportComment, reviews };
 }
 
 // The hook path: the rule action for an observed `fm-fleet-ledger.sh appended` call.
