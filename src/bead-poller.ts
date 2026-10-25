@@ -9,6 +9,7 @@ import { DEFAULT_STALE_MS, pidAlive, readHeartbeat, writeHeartbeat } from './hea
 import { CLOSED_BY, storeRunner } from './bead-actions.ts';
 import { queueRoot } from './paths.ts';
 import { tailStatusOnce } from './status-tail.ts';
+import { drainShadowPending } from './jev/pending.ts';
 
 // bead -> Firstmate. The rule actions write beads; this closes the other direction.
 //
@@ -170,6 +171,8 @@ export async function watchPoller({ root = queueRoot(), env = process.env, inter
         if (tail.failed?.length) state.lastError = `status-tail ${tail.failed[0].task}: ${tail.failed[0].error}`;
       } catch (error) { state.lastError = `status-tail: ${String(error)}`; }
     }
+    // Shadow observations the hook queued (JEV_SHADOW only): labelled here, logged only.
+    await drainShadowPending({ root, env, ask: options.shadowAsk }).catch(() => {});
     state.cycles += 1; state.lastPollAt = new Date().toISOString();
     await writeHeartbeat(root, { ...state, intervalMs: pollMs }, 'poller').catch(() => {});
     if (state.cycles >= maxCycles || signal?.aborted) break;
