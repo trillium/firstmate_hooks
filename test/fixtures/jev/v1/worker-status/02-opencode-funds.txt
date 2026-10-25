@@ -1,0 +1,1 @@
+blocked [at=1792908253]: opencode relaunch twice still boots on paid DeepSeek V4 Pro default and hits insufficient-funds, ignoring --model opencode-go/minimax-m3.1-flash-free; filed <id>; parking rather than retrying a third time

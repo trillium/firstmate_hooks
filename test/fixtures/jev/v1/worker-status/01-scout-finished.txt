@@ -1,0 +1,2 @@
+working [at=1792647181]: starting prior-art scout on Kokoro split architectures
+done [at=1792647669]: scout report complete; verified no network tensor splits exist; intermediate tensors 6x-140x worse than audio codecs; phonemes/neural codecs recommended

@@ -1,0 +1,2 @@
+Stop hook fires twice for one turn
+The turn-end hook emits a duplicate event for a single assistant turn, so the wake learner counts it twice. Seen three times today; looks like the hook is registered in both the user and project settings.

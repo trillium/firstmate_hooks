@@ -1,0 +1,2 @@
+Maybe show the worker's last status line in the pane title
+It would be nice, not needed yet: a worker's newest status line could appear in its pane title so the state is visible without opening the pane. Not committed to anything.

@@ -1,0 +1,3 @@
+done [at=1792358453]: ready in branch fm/<id>-hold-q1
+done [at=1792373807]: ready in branch fm/<id>-hold-q1 (<id>), already a fast-forward of local main <id>; tests 61/61 on this base
+blocked [at=1792373919]: cannot rebase onto projects/firstmate <id> - that line has no 'Captain hold origin' tracking at all (the origin-mismatch refusal exists only in the home-local main lineage, <id> <path> <id>), so the fix has nothing to apply to there; branch kept at <id> on <id>
