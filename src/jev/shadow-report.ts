@@ -69,6 +69,22 @@ export function buildReport(lines: any[], { since, pack }: { since?: string; pac
   }));
 }
 
+// Promote lines (promote.ts): candidates are every call made with JEV_PROMOTE on; applied are
+// the ones that moved the fleet state. Reasons are counted so a week's applications can be
+// read beside the shadow bands.
+export function buildPromoteBlock(lines: any[], { since, pack }: { since?: string; pack?: string } = {}) {
+  const sinceMs = since ? Date.parse(since) : null;
+  const rows = lines.filter(l => l.kind === 'promote' && (sinceMs === null || Date.parse(l.timestamp) >= sinceMs) && (!pack || l.pack === pack));
+  if (!rows.length) return null;
+  const reasons: Record<string, number> = {};
+  for (const l of rows) reasons[l.reason] = (reasons[l.reason] ?? 0) + 1;
+  return { candidates: rows.length, applied: rows.filter(l => l.applied === true).length, reasons };
+}
+
+export const formatPromoteBlock = (block: any) => (block
+  ? `promote\n  candidates: ${block.candidates}  applied: ${block.applied}  (${Object.entries(block.reasons).map(([k, v]) => `${k}=${v}`).join(' ')})`
+  : '');
+
 const cell = value => (value === null || value === undefined ? '-' : String(value));
 
 export function formatReport(report: any[]): string {
@@ -93,8 +109,11 @@ export async function main(argv, { log = console.log, env = process.env }: Recor
     else throw new Error(`unknown argument: ${argv[i]}`);
   }
   const text = await readFile(opt.log ?? evalLogPath(env), 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
-  const report = buildReport(parseLog(text), { since: opt.since, pack: opt.pack });
-  log(opt.json ? JSON.stringify(report, null, 2) : formatReport(report));
+  const lines = parseLog(text);
+  const report = buildReport(lines, { since: opt.since, pack: opt.pack });
+  const promote = buildPromoteBlock(lines, { since: opt.since, pack: opt.pack });
+  if (opt.json) log(JSON.stringify(promote ? { packs: report, promote } : report, null, 2));
+  else log(promote ? `${formatReport(report)}\n\n${formatPromoteBlock(promote)}` : formatReport(report));
   return 0;
 }
 

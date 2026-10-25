@@ -25,7 +25,7 @@ export function renderPollerPlist({ env = process.env, root = queueRoot(env), in
   const environment: Record<string, string> = { HOME: home, PATH: path, FM_HOOK_QUEUE: root,
     FM_HOME: env.FM_HOME ?? join(home, 'fm_home', 'firstmate') };
   for (const [key, value] of Object.entries(env)) {
-    if (/^(FM_HOOK_(POLL_[A-Z_]+|[A-Z]+_BIN|FM_BIN_DIR)|JEV_(SHADOW|SHADOW_TIMEOUT_MS|SHADOW_MAX_PER_CYCLE|EVAL_LOG))$/.test(key)) environment[key] = String(value);
+    if (/^(FM_HOOK_(POLL_[A-Z_]+|[A-Z]+_BIN|FM_BIN_DIR)|JEV_(PROMOTE|SHADOW|SHADOW_TIMEOUT_MS|SHADOW_MAX_PER_CYCLE|EVAL_LOG))$/.test(key)) environment[key] = String(value);
   }
   if (intervalMs) environment.FM_HOOK_POLL_INTERVAL_MS = String(intervalMs);
   const lines = Object.entries(environment).map(([key, value]) => `      <key>${escape(key)}</key>\n      <string>${escape(value)}</string>`);
