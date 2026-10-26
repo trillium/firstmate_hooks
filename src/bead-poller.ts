@@ -15,9 +15,13 @@ import { drainShadowPending } from './jev/pending.ts';
 //
 // Each poll finds `review` beads (and `human`-labelled beads in the other watched
 // stores) that were closed since the last poll and relays each one to Firstmate once:
-//   - a bead minted from a captain hold carries fm-task:<task> and fm-key:<key>, so its
-//     answer is delivered as `fm-send.sh <task> --resolve-key <key> <text>`;
+//   - a captain answer (fm-task: and fm-key:, and not a merge close, and no other open
+//     review bead still carrying that fm-hold-task:) is delivered as
+//     `fm-send.sh <task> --resolve-key <key> <text>`;
+//   - a merge close, or a hold whose task still has another open review bead, becomes
+//     `fm-inbox.sh note` headed "closed by firstmate (not a captain answer)";
 //   - every other closed bead becomes `fm-inbox.sh note`, the sanctioned wake append.
+//   - a bead labelled fm-closed-by:fm-hooks was closed by fm-hooks itself and is skipped.
 //
 // Safety is at-least-once with idempotent delivery. A bead is recorded as relayed only
 // after its relay succeeded, and the cursor never advances past a bead whose relay
@@ -89,14 +93,37 @@ export function firstmateRelay(env = process.env) {
 
 const label = (labels, prefix) => (labels ?? []).find(l => l.startsWith(prefix))?.slice(prefix.length) ?? null;
 
-export function describeClosure(store, bead, comments) {
-  const answer = [...comments].reverse().map(c => String(c.text ?? '').trim()).find(t => t && !t.startsWith('fm-hooks:'))
+// The text a closure would be relayed as: the last comment fm-hooks did not write, else the close reason.
+export function closureAnswer(bead, comments) {
+  return [...comments].reverse().map(c => String(c.text ?? '').trim()).find(t => t && !t.startsWith('fm-hooks:'))
     ?? (bead.close_reason ? String(bead.close_reason).trim() : '');
+}
+
+// A duplicate or merge close is firstmate (or fm-hooks) retiring a bead, not the captain deciding.
+export function isMergeMarker(beadId, answer) {
+  const text = String(answer ?? '').trim();
+  if (text.startsWith('duplicate of ') || text.startsWith('fm-hooks:')) return true;
+  return [...text.matchAll(/review-fmh[A-Za-z0-9]+/g)].some(match => match[0] !== beadId);
+}
+
+// `captain: false` means another open review bead still carries this bead's fm-hold-task.
+export function describeClosure(store, bead, comments, { captain = true } = {}) {
+  const answer = closureAnswer(bead, comments);
   const task = label(bead.labels, 'fm-task:');
   const key = label(bead.labels, 'fm-key:');
+  const merge = isMergeMarker(bead.id, answer);
+  const resolve = captain && Boolean(task) && Boolean(key) && !merge;
+  const firstmateClose = !resolve && ((Boolean(task) && Boolean(key) && merge) || !captain);
   const hash = createHash('sha256').update(`${store}\0${bead.id}\0${bead.closed_at}`).digest('hex').slice(0, 10);
-  const head = key ? `Captain answered hold ${bead.id}` : `Captain closed ${store} bead ${bead.id}`;
-  return { task, key, requestId: `bead-${bead.id}-${hash}`.replace(/[^A-Za-z0-9_.-]/g, '_'),
+  const head = resolve
+    ? `Captain answered hold ${bead.id}`
+    : firstmateClose
+      ? `Hold bead ${bead.id} closed by firstmate (not a captain answer)`
+      : key
+        ? `Captain answered hold ${bead.id}`
+        : `Captain closed ${store} bead ${bead.id}`;
+  return { task: firstmateClose ? null : task, key: firstmateClose ? null : key,
+    requestId: `bead-${bead.id}-${hash}`.replace(/[^A-Za-z0-9_.-]/g, '_'),
     text: `${head} (${clip(bead.title ?? '', 120)}): ${answer ? clip(answer, 1500) : 'closed without a comment'}` };
 }
 
@@ -130,7 +157,21 @@ export async function pollOnce({ root = queueRoot(), env = process.env, stores =
       if ((bead.labels ?? []).includes(CLOSED_BY)) continue;
       try {
         const comments = JSON.parse((await cli(store, ['comments', bead.id, '--json'])) || '[]');
-        const closure = describeClosure(store, bead, comments);
+        const holdTask = label(bead.labels, 'fm-hold-task:');
+        let captain = true;
+        if (holdTask) {
+          try {
+            const rows = JSON.parse((await cli('review', ['list', '--all', '-l', `fm-hold-task:${holdTask}`, '--json', '-n', '0'])) || '[]');
+            if (rows.some(row => row.id !== bead.id && row.status !== 'closed')) captain = false;
+          } catch (error) {
+            // A failed lookup must not become a captain answer. A merge marker is already not one.
+            if (!isMergeMarker(bead.id, closureAnswer(bead, comments))) {
+              failed.push({ store, id: bead.id, error: `hold-task: ${clip(error.stderr || error.message, 200)}`, closedAt: bead.closed_at });
+              continue;
+            }
+          }
+        }
+        const closure = describeClosure(store, bead, comments, { captain });
         const result = await relay(closure);
         cursor.relayed[ledgerKey] = new Date().toISOString();
         // Persist after every relay, so a crash on the next bead cannot re-send this one.

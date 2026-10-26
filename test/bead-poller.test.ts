@@ -144,6 +144,65 @@ test('watch writes a heartbeat that status reads as alive, then stale', async ()
   assert.match(stale.reason, /stale/);
 }));
 
+test('a closed bead labelled fm-closed-by:fm-hooks is skipped', async () => withStubs(async ({ env }) => {
+  const { sent, relay } = recorder();
+  await pollOnce({ root: root(env), env, relay, now: T0 });
+  await seed(env, 'review', { id: 'review-fmhdead', title: 'hold', status: 'closed', closed_at: '2026-10-10T12:01:00Z',
+    labels: ['fm-task:t', 'fm-key:captain-hold-t-1', 'fm-closed-by:fm-hooks'], close_reason: 'duplicate of review-fmhkeep' });
+  const result = await pollOnce({ root: root(env), env, relay, now: T0 + 120000 });
+  assert.deepEqual(result.relayed, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(sent, []);
+}));
+
+test('a duplicate close reason is a note, not an fm-send --resolve-key', async () => withStubs(async ({ env }) => {
+  const { sent, relay } = recorder();
+  await pollOnce({ root: root(env), env, relay, now: T0 });
+  await seed(env, 'review', { id: 'review-fmhdup', title: 'Captain hold: t - db', status: 'closed', closed_at: '2026-10-10T12:02:00Z',
+    labels: ['human', 'fm-task:t', 'fm-key:captain-hold-t-1', 'fm-hold-task:t'],
+    comments: [{ text: 'fm-hooks: duplicate of review-fmhkeep; its comments were copied there' }],
+    close_reason: 'duplicate of review-fmhkeep' });
+  const result = await pollOnce({ root: root(env), env, relay, now: T0 + 180000 });
+  assert.equal(result.relayed.length, 1);
+  assert.equal(result.relayed[0].via, 'note');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].task, null);
+  assert.equal(sent[0].key, null);
+  assert.match(sent[0].text, /^Hold bead review-fmhdup closed by firstmate \(not a captain answer\)/);
+  assert.match(sent[0].text, /duplicate of review-fmhkeep/);
+}));
+
+test('a hold closed while another open bead still carries fm-hold-task is a note, not a send', async () => withStubs(async ({ env }) => {
+  const { sent, relay } = recorder();
+  await pollOnce({ root: root(env), env, relay, now: T0 });
+  await seed(env, 'review', { id: 'review-fmhclosed', title: 'Captain hold: t - db', status: 'closed', closed_at: '2026-10-10T12:02:00Z',
+    labels: ['human', 'fm-task:t', 'fm-key:captain-hold-t-2', 'fm-hold-task:t'],
+    comments: [{ text: 'use sqlite' }] });
+  await seed(env, 'review', { id: 'review-fmhopen', title: 'Captain hold: t - db', status: 'open',
+    labels: ['human', 'fm-hold-task:t', 'fm-task:t', 'fm-key:captain-hold-t-1'] });
+  const result = await pollOnce({ root: root(env), env, relay, now: T0 + 180000 });
+  assert.equal(result.relayed.length, 1);
+  assert.equal(result.relayed[0].via, 'note');
+  assert.equal(sent[0].key, null);
+  assert.match(sent[0].text, /^Hold bead review-fmhclosed closed by firstmate \(not a captain answer\)/);
+  assert.match(sent[0].text, /use sqlite/);
+}));
+
+test('a review human respond on the last open hold still relays via send', async () => withStubs(async ({ env }) => {
+  const { sent, relay } = recorder();
+  await pollOnce({ root: root(env), env, relay, now: T0 });
+  await seed(env, 'review', { id: 'review-fmhanswer', title: 'Captain hold: t - db', status: 'closed', closed_at: '2026-10-10T12:02:00Z',
+    labels: ['human', 'fm-task:t', 'fm-key:captain-hold-t-1', 'fm-hold-task:t'],
+    comments: [{ text: 'use sqlite' }], close_reason: 'responded' });
+  const result = await pollOnce({ root: root(env), env, relay, now: T0 + 180000 });
+  assert.equal(result.relayed.length, 1);
+  assert.equal(result.relayed[0].via, 'send');
+  assert.equal(sent[0].task, 't');
+  assert.equal(sent[0].key, 'captain-hold-t-1');
+  assert.match(sent[0].text, /^Captain answered hold review-fmhanswer/);
+  assert.match(sent[0].text, /use sqlite/);
+}));
+
 test('a bead fm-hooks closed itself after a hold answer is neither relayed nor failed; without the label it still is', async () => withStubs(async ({ env }) => {
   const { sent, relay } = recorder();
   await pollOnce({ root: root(env), env, relay, now: T0 });

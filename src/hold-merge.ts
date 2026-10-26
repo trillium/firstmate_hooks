@@ -1,10 +1,11 @@
-import { commentTexts, recordedHoldReason, unexpanded, clip } from './bead-actions.ts';
+import { CLOSED_BY, commentTexts, recordedHoldReason, unexpanded, clip } from './bead-actions.ts';
 
 // One-time clean-up of `review` hold beads minted before captainHold deduplicated them.
 // Dry-run unless `apply` is true.
 //   duplicates: a task with more than one open hold bead keeps the oldest; comments the
 //     others hold that it lacks (matched by `[cid:...]` marker, else exact text) are copied
-//     across, then each newer bead gets a pointer comment and is closed "duplicate of <id>".
+//     across, then each newer bead gets a pointer comment, the fm-closed-by label, and is closed
+//     "duplicate of <id>". The label is what stops the poller treating that close as an answer.
 //   titles: an open hold bead whose title still carries an unexpanded shell expression gets
 //     the reason recorded on the task (fm-tasks-axi show --full) as its title.
 
@@ -40,6 +41,8 @@ export async function mergeDuplicateHolds(run, { apply = false, env = process.en
         }
         run('review', ['comments', 'add', keep.id, `fm-hooks: duplicate hold ${dup.id} merged here`]);
         run('review', ['comments', 'add', dup.id, `fm-hooks: duplicate of ${keep.id}; its comments were copied there`]);
+        // Label first, close second: a closure the poller can see always already carries the label.
+        run('review', ['label', 'add', dup.id, CLOSED_BY]);
         run('review', ['close', dup.id, '-r', `duplicate of ${keep.id}`]);
       }
       closed.add(dup.id);
