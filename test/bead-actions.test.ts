@@ -205,6 +205,11 @@ test('hold-merge plans duplicates and $ titles, and writes only with apply', asy
   const beads = (await db()).review.beads;
   assert.equal(beads['review-b'].status, 'closed');
   assert.equal(beads['review-b'].close_reason, 'duplicate of review-a');
+  assert.ok(beads['review-b'].labels.includes('fm-closed-by:fm-hooks'));
+  const log = await writes();
+  const labelAt = log.findIndex(c => c.store === 'review' && c.argv[0] === 'label' && c.argv[1] === 'add' && c.argv[2] === 'review-b' && c.argv[3] === 'fm-closed-by:fm-hooks');
+  const closeAt = log.findIndex(c => c.store === 'review' && c.argv[0] === 'close' && c.argv[1] === 'review-b');
+  assert.ok(labelAt >= 0 && closeAt >= 0 && labelAt < closeAt, 'CLOSED_BY is added before close');
   assert.equal(beads['review-a'].title, 'Captain hold: t1 - real reason');
   assert.ok(beads['review-a'].comments.some(c => c.text === 'only here [cid:bb]'));
   assert.deepEqual(await mergeDuplicateHolds(run, { env }), [], 'a repeat run has nothing left to do');
