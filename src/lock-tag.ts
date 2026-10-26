@@ -57,15 +57,18 @@ export function createLockTagger({
 }: Record<string, any> = {}) {
   let last: string | null | undefined; // undefined = never applied
   let warned = false;
+  let noHomeLogged = false;
   const warn = error => { if (!warned) { warned = true; log(`fm-hooks lock-tag: herdr unavailable: ${error?.message ?? error}`); } };
 
   return async function apply(): Promise<{ changed: boolean; holder?: string | null }> {
     const home = resolveFmHome(env);
-    if (!home) return { changed: false };
+    if (!home) {
+      if (!noHomeLogged) { noHomeLogged = true; log('fm-hooks lock-tag inactive: no FM_HOME'); }
+      return { changed: false };
+    }
     let content: string | null;
     try { content = await readLock(join(stateDirOf(home), '.lock')); } catch { content = null; }
     if (content === last) return { changed: false };
-    last = content;
     const pid = parseLock(content);
     const live = pid !== null && isAlive(pid) ? pid : null;
     try {
@@ -73,6 +76,7 @@ export function createLockTagger({
       for (const pane of panes) await run(clearArgs(pane.id));
       const holder = matchPane(live, panes);
       if (holder) await run(setArgs(holder));
+      last = content; // recorded only once herdr took it, so a failure retries next cycle
       warned = false;
       return { changed: true, holder };
     } catch (error) {

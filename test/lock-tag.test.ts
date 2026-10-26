@@ -59,3 +59,22 @@ test('herdr failure is logged once and never thrown', async () => {
   await apply();
   assert.equal(logs.length, 1);
 });
+
+test('a failed herdr apply is retried next cycle with the same lock content', async () => {
+  const herdr = fakeHerdr({ p1: 100 });
+  let fail = true;
+  const run = async args => { if (fail) throw new Error('down'); return herdr.run(args); };
+  const apply = createLockTagger({ env: { FM_HOME: '/nowhere/fm_home/x' }, run, isAlive: () => true,
+    readLock: async () => '100', log: () => {} });
+  await apply();
+  fail = false;
+  assert.deepEqual(await apply(), { changed: true, holder: 'p1' });
+  assert.equal((await apply()).changed, false);
+});
+
+test('an unresolved FM_HOME logs once', async () => {
+  const logs: string[] = [];
+  const apply = createLockTagger({ env: {}, log: m => logs.push(m) });
+  await apply(); await apply();
+  assert.deepEqual(logs, ['fm-hooks lock-tag inactive: no FM_HOME']);
+});
