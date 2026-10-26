@@ -201,6 +201,23 @@ A closure is a captain answer only when the bead carries both `fm-task:` and `fm
 
 Deploy and undo steps are in `config/README.md`. A failed Bash call reports one exit code, so a `*-failure` rule fires only when the `fm-*` invocation decided it. An invocation piped into another stage, guarded by `||`, backgrounded, or followed by another command after `;` or a newline records outcome `unknown` instead of `failure`; an invocation followed by `&&` still counts, because the chain stops at it.
 
+## Captain-action feed
+
+Anything that needs the captain's attention, decision, approval, review, input or hands is mirrored as one bead in the `status` store, so it cannot live only in a report, a comment, or a review bead. Nothing in Firstmate is changed or written; every source is read through a CLI.
+
+**How it runs.** The resident worker (`worker.ts --watch`, the supervised unit) calls `src/captain-feed.ts` once per cycle, throttled to `FM_HOOK_CAPTAIN_FEED_MS` (default 300000) and bounded to `FM_HOOK_CAPTAIN_FEED_MAX_WRITES` writes per run (default 25; a large backfill finishes over the next cycles, 30 s apart). It needs `FM_HOME` in the worker's environment (the launchd job carries it from install time); `FM_HOOK_CAPTAIN_FEED=0` turns it off. A failure is logged and never stops the queue. There is no extra launchd job. The same code runs on demand:
+
+    bun bin/fm-hooks-captain-feed.ts sync [--dry-run] [--max-writes N]   # upsert now; prints a JSON summary
+    bun bin/fm-hooks-captain-feed.ts audit [--json]                      # list drift; exit 1 when there is any
+
+**Sources (read-only).** (a) open beads in `review`; (b) open beads labelled `human` in every store `brain stores list` names (except `status`, plus any in `FM_HOOK_CAPTAIN_FEED_SKIP`); (c) Firstmate captain holds from `bin/fm-tasks-axi.sh list --state held` (hold kind `captain`) and PRs awaiting the captain's merge from `bin/fm-bearings-snapshot.sh --json` (`contributions.captain`). A hold whose `review` bead (`fm-hold-task:<task>`) is already a source, and a PR already named by its hold, are not duplicated.
+
+**Label schema.** One feed bead per source item: `captain-action`, `source:<key>`, `src-store:<store|firstmate>`. The key is the source bead id (`review-fmh29b9e66a`, `task-h1`), `fm-hold:<task>` for a Firstmate hold, or `fm-pr:<task>` for a PR. The title is `Captain: <source title>`; the priority is the source's. The body carries *Why you*, *Ask* (the exact decision, with the `<store> human respond <id>` command for bead sources), *Priority*, *Source*, *Evidence* (URLs and report paths found in the source), and *State*.
+
+**Lifecycle.** Upsert is by `source:<key>`: a new item creates a bead, a changed item rewrites the same bead, an unchanged item writes nothing, a source that reopens reopens its bead, duplicates collapse to one. When the source closes or stops being captain-needed the feed bead is closed with the reason `source closed or no longer needs the captain`. A source that could not be read (store down, ssh failure) never closes its feed beads.
+
+**Auditing for missed items.** `audit` writes nothing. It lists every source item with no open feed bead, every open feed bead whose source has closed, feed beads whose text is out of date, duplicates, and any source it could not read (an unreadable source counts as drift because completeness cannot be shown). Exit 0 means the feed matches the sources; exit 1 means drift, and `sync` repairs it. Store CLIs over ssh print `mux_client`/`ControlSocket` noise on stderr; stderr is discarded and only stdout is parsed.
+
 ## Inbox-connect compatibility
 
 The canonical workflow is maintained outside this repository in the Parlay project: `/Users/trilliumsmith/code/parlay/examples/fleet/skills/inbox-handler/SKILL.md` documents the inbox-handler skill; `/Users/trilliumsmith/code/parlay/examples/fleet/pi-inbox-bridge/src/bridge.ts`, `helpers.ts`, `config.ts`, `listener.ts`, `tailer.ts`, and `worker-prompt.md` implement Pi's `/inbox-connect [store]` command. The skill is installed for Claude Code as `~/.claude/skills/inbox-handler` (a symlink to the Parlay source). It describes enrollment and the serial inbox worker procedure; it does not itself implement `/inbox-connect`.
