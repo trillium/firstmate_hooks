@@ -71,6 +71,12 @@ Both processes handle `SIGINT`/`SIGTERM` and leave a final beat, so a stopped wo
 
 Rules are still only as good as the rule file. With no rules file, or a rule set that matches nothing, a perfectly healthy worker drains an empty queue forever and reports `processed: 0` — alive and correct, doing nothing. Check `processed` and `lastResultAt`, not just `ruleEvaluationLive`.
 
+### Lock tag (herdr)
+
+The resident worker marks the herdr pane that holds the Firstmate session lock (`$FM_HOME/state/.lock`, which holds the harness pid) with the pane token `hs_lock=LOCK`, reported under source `fm-lock`. It matches the lock pid to a pane's `foreground_process_group_id`, and acts only when the lock content changes: a new acquisition clears the token from every pane, then sets it on the new holder. A missing, unparsable or dead-pid lock clears it everywhere. Only a direct pid match is made, and a missing or failing `herdr` is logged once and never affects rule evaluation. To color the holder, add a style entry for the token to a sidebar row in herdr's `config.toml`, next to your other `$hs_*` tokens:
+
+    { token = "$hs_lock", fg = "#5AA9E6", bold = true }
+
 ### Heartbeat files
 
 `<queue>/worker/worker.json` and `<queue>/worker/supervisor.json` hold one record per role, written through a temporary file and renamed so a reader never sees a partial beat and mistakes a busy worker for a dead one. Each records `pid`, `startedAt`, `updatedAt`, and the worker's `cycles`, `processed`, `done`, `failed`, `retried`, `intervalMs`, `lastResultAt`, and `lastError`; the supervisor's adds `restarts` and `lastExit`. Files are mode 0600 and hold no command output or action payloads. A beat's temporary file is removed when its write or rename fails, and every beat also sweeps `<queue>/worker/` for `<role>.json.<pid>.<uuid>.tmp` files whose pid is no longer running, so a process killed between writing and renaming (launchd's SIGKILL, a crash) leaves no litter that accumulates across restarts; a temporary whose pid is alive is a write in flight and is left alone. A worker that dies mid-cycle leaves its last count intact rather than resetting it, so an unexplained drop in `processed` is visible after a restart.
