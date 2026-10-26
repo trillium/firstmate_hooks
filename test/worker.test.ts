@@ -187,7 +187,7 @@ test('supervised worker: a real resident process drains a real queue end to end'
   await writeFile(rulesPath, JSON.stringify({ rules: [{ id: 'supervised-proof', operation: 'fm_scout',
     outcomes: ['success'], action: { command: 'touch', args: [marker] } }] }));
 
-  const env = { ...process.env, FM_HOOK_QUEUE: queue, FM_HOOK_RULES: rulesPath };
+  const env = { ...process.env, FM_HOOK_QUEUE: queue, FM_HOOK_RULES: rulesPath, FM_HOOK_CAPTAIN_FEED: '0' };
   const child = spawn(process.execPath, [CLI, 'supervise', '--queue', queue, '--interval', '100'], { env, stdio: 'ignore' });
   try {
     // Wait for the supervisor and the worker it spawned to both be beating. Reaching

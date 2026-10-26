@@ -5,6 +5,7 @@ import { appendEventLog, runQueue } from './queue.ts';
 import { actionTimeoutMs, queueRoot } from './paths.ts';
 import { writeHeartbeat } from './heartbeat.ts';
 import { createLockTagger } from './lock-tag.ts';
+import { createFeedSyncer } from './captain-feed.ts';
 
 export const DEFAULT_INTERVAL_MS = 1000;
 // The observation log already proves the hooks are loaded. This beat proves the other
@@ -74,6 +75,8 @@ export async function watchQueue({
   // Off by default so a library caller or test never reaches the real herdr; the resident
   // entry point below passes the real tagger.
   lockTag = async () => {},
+  // Same rule for the captain-action feed sync: off unless the resident entry point passes it.
+  captainFeed = async () => {},
 }: Record<string, any> = {}) {
   // An explicit flag wins; otherwise a supervised launch re-times the worker through
   // the environment, which is the only channel a plist has.
@@ -91,6 +94,7 @@ export async function watchQueue({
     if (signal?.aborted) break;
     // Never allowed to break rule evaluation: the tagger already swallows herdr errors.
     await lockTag().catch(() => {});
+    await captainFeed().catch(() => {});
     let results = [];
     try {
       results = await runQueue({ root, execute: run, env });
@@ -183,7 +187,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // final beat in place so `status` shows where it stopped rather than a stale gap.
     const controller = new AbortController();
     for (const name of ['SIGINT', 'SIGTERM']) process.on(name, () => controller.abort());
-    const state = await watchQueue({ ...options, root, intervalMs, signal: controller.signal, lockTag: createLockTagger() });
+    const state = await watchQueue({ ...options, root, intervalMs, signal: controller.signal, lockTag: createLockTagger(), captainFeed: createFeedSyncer() });
     process.exitCode = state.lastError ? 1 : 0;
   } else {
     const results = await runQueue({ root, execute });
