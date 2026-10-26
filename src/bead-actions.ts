@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { queueRoot } from './paths.ts';
+import { resolveFmHome } from './fm-home.ts';
 import { fleetAction } from './fleet-beads.ts';
 import { MINTED_PREFIX, resolveProjectBead } from './project-beads.ts';
 import { scoutReport } from './scout-capture.ts';
@@ -141,7 +142,7 @@ export async function describeCall(event, env = process.env) {
     return { verb: 'answer', task: args[1], decisionFile: flagValue(args, '--decision-file') };
   }
   if (op === 'fm-captain-hold.sh' && first === 'hold' && args[1] && !args[1].startsWith('-')) {
-    return { verb: 'hold', task: args[1], reason: flagValue(args, '--reason') ?? 'no reason given',
+    return { verb: 'hold', task: args[1], reason: flagValue(args, '--reason') ?? '',
       title: flagValue(args, '--title') };
   }
   return null;
@@ -210,19 +211,68 @@ async function answerHold(run, event, call) {
   return { closed };
 }
 
-function captainHold(run, event, call) {
+// A reason that reached the hook as raw argv still holds the shell's text: `$reason`,
+// `${R}`, `$(cmd)` or a backtick. It must never become a bead title.
+export const unexpanded = (text: string) => !String(text ?? '').trim() || /\$[A-Za-z_{(]|`/.test(String(text));
+
+// The hold reason Firstmate recorded on the task itself: `fm-tasks-axi.sh show <task> --full`
+// prints it as a `hold_reason:` field (quoted JSON when it has special characters).
+export function recordedHoldReason(task: string, env: Record<string, any>, event: Record<string, any>, exec = execFileSync): string | null {
+  const home = resolveFmHome(env, event.cwd ?? null);
+  const binDir = env.FM_HOOK_FM_BIN_DIR || (home ? join(home, 'bin') : null);
+  if (!binDir) return null;
+  try {
+    const out = String(exec(join(binDir, 'fm-tasks-axi.sh'), ['show', task, '--full'],
+      { encoding: 'utf8', env: { ...env, ...(home ? { FM_HOME: home } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 }));
+    const raw = /^\s*hold_reason:\s*(.*)$/m.exec(out)?.[1]?.trim();
+    if (!raw || raw === '-') return null;
+    let reason = raw;
+    if (raw.startsWith('"')) { try { reason = JSON.parse(raw); } catch { return null; } }
+    return reason.trim() && !unexpanded(reason) ? reason : null;
+  } catch { return null; }
+}
+
+const parseList = out => JSON.parse(out || '[]');
+
+// Beads (open or closed) the task's earlier holds were filed as.
+export const holdBeads = (run, task) => parseList(run('review', ['list', '--all', '-l', `fm-hold-task:${task}`, '--json', '-n', '0']));
+
+function captainHold(run, event, call, env) {
   if (!call) return { skipped: 'not a hold' };
   if (call.verb === 'answer') return answerHold(run, event, call);
   const id = `review-fmh${hex(event.correlationId, 8)}`;
   if (exists(run, 'review', id)) return { target: id, wrote: false };
   // Firstmate keys a hold `captain-hold-<task>-<n>`; n is one past the holds this task
   // already has. Holds are minted under a per-task label, so the count is a store read.
-  const prior = JSON.parse(run('review', ['list', '--all', '-l', `fm-hold-task:${call.task}`, '--json', '-n', '0']) || '[]');
-  const key = `captain-hold-${call.task}-${prior.length + 1}`;
+  const prior = holdBeads(run, call.task);
+  // One open review bead per held task: a re-hold annotates it instead of minting a twin.
+  const open = prior.filter(bead => bead.status !== 'closed').sort((x, y) => String(x.created_at ?? '').localeCompare(String(y.created_at ?? '')))[0];
+  const keyPrefix = `fm-key:captain-hold-${call.task}-`;
+  let key = `captain-hold-${call.task}-${prior.length + 1}`;
+  if (open) {
+    // A re-hold has no bead of its own, so its occurrence number is one past the highest key
+    // this task already carries (labels), and a redelivery reuses the key its comment recorded.
+    const tag = marker(event.correlationId);
+    const earlier = commentTexts(run, 'review', open.id).find(text => text.includes(tag));
+    const recorded = earlier && /\(fm-key:(\S+?)\)/.exec(earlier)?.[1];
+    if (recorded) return { target: open.id, wrote: false, reheld: true, key: recorded };
+    const seen = prior.flatMap(bead => bead.labels ?? []).filter(l => l.startsWith(keyPrefix)).map(l => Number(l.slice(keyPrefix.length)) || 0);
+    key = `captain-hold-${call.task}-${Math.max(prior.length, ...seen) + 1}`;
+  }
+  let reason = call.reason;
+  if (unexpanded(reason)) {
+    reason = recordedHoldReason(call.task, env, event);
+    if (!reason) return { skipped: 'unresolved reason', raw: call.reason };
+  }
+  if (open) {
+    commentOnce(run, 'review', open.id, event.correlationId, `fm-hooks: task re-held: ${clip(reason, 1500)} (fm-key:${key})`);
+    run('review', ['label', 'add', open.id, `fm-key:${key}`]);
+    return { target: open.id, wrote: false, reheld: true, key };
+  }
   const wrote = createOnce(run, 'review', id, {
-    title: `Captain hold: ${call.task} - ${clip(call.reason, 100)}`, priority: 1,
+    title: `Captain hold: ${call.task} - ${clip(reason, 100)}`, priority: 1,
     labels: ['human', 'fm-hooks', 'fm-hold', `fm-hold-task:${call.task}`, `fm-task:${call.task}`, `fm-key:${key}`],
-    body: `${call.reason}\n\nFirstmate held task ${call.task} for the captain.\nAnswer with: review human respond ${id} "your decision"\nThe answer is relayed to Firstmate (--resolve-key ${key}).\n\ncorrelationId: ${event.correlationId}` });
+    body: `${reason}\n\nFirstmate held task ${call.task} for the captain.\nAnswer with: review human respond ${id} "your decision"\nThe answer is relayed to Firstmate (--resolve-key ${key}).\n\ncorrelationId: ${event.correlationId}` });
   return { target: id, wrote, key };
 }
 
@@ -233,5 +283,5 @@ export async function runBeadAction({ kind, operation, correlationId, env = proc
   if (kind === 'fleet') return fleetAction(run, event, env);
   if (kind === 'scout-report') return scoutReport({ run, event, env });
   const call = await describeCall(event, env);
-  return kind === 'captain-hold' ? captainHold(run, event, call) : projectComment(run, event, call, env);
+  return kind === 'captain-hold' ? captainHold(run, event, call, env) : projectComment(run, event, call, env);
 }
