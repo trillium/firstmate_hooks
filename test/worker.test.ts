@@ -275,6 +275,11 @@ test('the plist carries only the environment fm-hooks resolves against', () => {
   assert.ok(plist.length < 3000, `plist should stay small, got ${plist.length} bytes`);
 });
 
+test('the plist carries FM_HOME with its value for the lock tag', () => {
+  const plist = renderPlist({ root: '/tmp/q', env: { HOME: '/Users/example', FM_HOME: '/srv/fm_home/firstmate' } });
+  assert.match(plist, /<key>FM_HOME<\/key>\s*<string>\/srv\/fm_home\/firstmate<\/string>/);
+});
+
 test('unload is awaited rather than assumed, which is what made install fail twice', async () => {
   // launchctl bootout returns before launchd unloads, so a naive install reboots into a
   // "Bootstrap failed: 5" error. waitForUnload must poll until print stops succeeding.
