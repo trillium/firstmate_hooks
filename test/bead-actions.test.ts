@@ -2,7 +2,7 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runBeadAction, callArgs, describeCall } from '../src/bead-actions.ts';
+import { runBeadAction, callArgs, describeCall, storeRunner } from '../src/bead-actions.ts';
 import { main as actionCli } from '../bin/fm-hooks-bead-action.ts';
 import { withStubs } from '../testlib/stub-env.ts';
 
@@ -118,10 +118,96 @@ test('captain hold files one human-labelled review bead carrying the resolve key
   assert.ok(beads[0].labels.includes('human'));
   assert.ok(beads[0].labels.includes('fm-key:captain-hold-task-h-1'));
   assert.ok(beads[0].labels.includes('fm-task:task-h'));
-  // a second hold on the same task is a new bead with the next occurrence key
-  const rehold = await recordEvent(env, { operation: 'fm-captain-hold.sh', correlationId: 'e'.repeat(64),
-    args: ['hold', 'task-h', '--reason', 'again'] });
-  assert.equal((await act(rehold, 'captain-hold', env)).key, 'captain-hold-task-h-2');
+}));
+
+const hold = (env, id, args) => recordEvent(env, { operation: 'fm-captain-hold.sh', correlationId: id.repeat(64).slice(0, 64), args: ['hold', 'task-h', ...args] });
+
+test('re-holding a task with an open hold bead comments on it and mints nothing', async () => withStubs(async ({ env, db, writes }) => {
+  const first = await act(await hold(env, 'a', ['--reason', 'pick a db']), 'captain-hold', env);
+  const reheld = await hold(env, 'e', ['--reason', 'again']);
+  const second = await act(reheld, 'captain-hold', env);
+  assert.deepEqual({ target: second.target, wrote: second.wrote, reheld: second.reheld, key: second.key },
+    { target: first.target, wrote: false, reheld: true, key: 'captain-hold-task-h-2' });
+  let beads = Object.values((await db()).review.beads) as any[];
+  assert.equal(beads.length, 1);
+  assert.ok(beads[0].labels.includes('fm-key:captain-hold-task-h-2'));
+  assert.match(beads[0].comments[0].text, /task re-held: again/);
+  // a redelivered re-hold writes nothing and answers with the same key
+  const before = (await writes()).length;
+  assert.equal((await act(reheld, 'captain-hold', env)).key, 'captain-hold-task-h-2');
+  assert.equal((await writes()).length, before);
+  // a third hold gets the next number
+  assert.equal((await act(await hold(env, 'f', ['--reason', 'third']), 'captain-hold', env)).key, 'captain-hold-task-h-3');
+  beads = Object.values((await db()).review.beads) as any[];
+  assert.equal(beads.length, 1);
+}));
+
+test('a hold whose earlier beads are all closed mints a new bead', async () => withStubs(async ({ env, db }) => {
+  const first = await act(await hold(env, 'a', ['--reason', 'one']), 'captain-hold', env);
+  const state = await db();
+  state.review.beads[first.target].status = 'closed';
+  await writeFile(env.STUB_DB, JSON.stringify(state));
+  const second = await act(await hold(env, 'b', ['--reason', 'two']), 'captain-hold', env);
+  assert.equal(second.wrote, true);
+  assert.equal(second.key, 'captain-hold-task-h-2');
+  assert.equal(Object.keys((await db()).review.beads).length, 2);
+}));
+
+async function fakeTasksAxi(env, body) {
+  await mkdir(env.FM_HOOK_FM_BIN_DIR, { recursive: true });
+  const file = join(env.FM_HOOK_FM_BIN_DIR, 'fm-tasks-axi.sh');
+  await writeFile(file, body);
+  await (await import('node:fs/promises')).chmod(file, 0o755);
+}
+
+test('a $reason argv takes the reason recorded on the task', async () => withStubs(async ({ env, db }) => {
+  await fakeTasksAxi(env, '#!/bin/sh\ncat <<EOF\ntask:\n  id: task-h\n  hold_reason: "Pick a db: a or b"\nEOF\n');
+  const result = await act(await hold(env, 'a', ['--reason', '$reason']), 'captain-hold', env);
+  assert.equal(result.wrote, true);
+  const bead = (Object.values((await db()).review.beads) as any[])[0];
+  assert.equal(bead.title, 'Captain hold: task-h - Pick a db: a or b');
+  assert.ok(!bead.description.includes('$'));
+}));
+
+test('an unresolvable reason is skipped and mints nothing', async () => withStubs(async ({ env, writes }) => {
+  await fakeTasksAxi(env, '#!/bin/sh\nexit 1\n');
+  for (const raw of ['$reason', '${R}', '$(cat x)', '`x`']) {
+    const result = await act(await hold(env, 'a', ['--reason', raw]), 'captain-hold', env);
+    assert.equal(result.skipped, 'unresolved reason');
+    assert.equal(result.raw, raw);
+  }
+  // no --reason at all, and no record either
+  assert.equal((await act(await hold(env, 'b', []), 'captain-hold', env)).skipped, 'unresolved reason');
+  assert.deepEqual(await writes(), []);
+}));
+
+test('a replayed hold correlation writes nothing', async () => withStubs(async ({ env, writes }) => {
+  const event = await hold(env, 'a', ['--reason', 'once']);
+  await act(event, 'captain-hold', env);
+  const before = (await writes()).length;
+  assert.equal((await act(event, 'captain-hold', env)).wrote, false);
+  assert.equal((await writes()).length, before);
+}));
+
+test('hold-merge plans duplicates and $ titles, and writes only with apply', async () => withStubs(async ({ env, db, writes }) => {
+  await fakeTasksAxi(env, '#!/bin/sh\necho \'  hold_reason: real reason\'\n');
+  const bead = (id, title, created, comments = []) => ({ id, title, labels: ['human', 'fm-hold', 'fm-hold-task:t1'], status: 'open', created_at: created, comments: comments.map(text => ({ text })) });
+  await writeFile(env.STUB_DB, JSON.stringify({ review: { beads: {
+    'review-a': bead('review-a', 'Captain hold: t1 - $reason', '2026-10-01', ['x [cid:aa]']),
+    'review-b': bead('review-b', 'Captain hold: t1 - real', '2026-10-02', ['x [cid:aa]', 'only here [cid:bb]']) } } }));
+  const { mergeDuplicateHolds } = await import('../src/hold-merge.ts');
+  const run = (store, args) => storeRunner(env)(store, args);
+  const plan = await mergeDuplicateHolds(run, { env });
+  assert.deepEqual(plan.map(l => [l.kind, l.action]), [['duplicate', 'would-merge'], ['title', 'would-retitle']]);
+  assert.equal(plan[0].comments, 1);
+  assert.deepEqual(await writes(), []);
+  await mergeDuplicateHolds(run, { env, apply: true });
+  const beads = (await db()).review.beads;
+  assert.equal(beads['review-b'].status, 'closed');
+  assert.equal(beads['review-b'].close_reason, 'duplicate of review-a');
+  assert.equal(beads['review-a'].title, 'Captain hold: t1 - real reason');
+  assert.ok(beads['review-a'].comments.some(c => c.text === 'only here [cid:bb]'));
+  assert.deepEqual(await mergeDuplicateHolds(run, { env }), [], 'a repeat run has nothing left to do');
 }));
 
 test('a hold subcommand other than hold writes nothing', async () => withStubs(async ({ env, writes }) => {
