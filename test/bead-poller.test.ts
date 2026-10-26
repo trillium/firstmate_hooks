@@ -62,7 +62,7 @@ test('a closed review bead is relayed once as a note, however many polls see it'
   assert.equal(first.relayed.length, 1);
   assert.equal(second.relayed.length, 0);
   assert.equal(sent.length, 1);
-  assert.match(sent[0].text, /Captain closed review bead review-a \(Ship it\?\): yes, ship/);
+  assert.match(sent[0].text, /review bead review-a closed \(closer unknown: captain or an agent\) \(Ship it\?\): yes, ship/);
   assert.equal(sent[0].task, null);
   assert.match(sent[0].requestId, /^bead-review-a-[0-9a-f]{10}$/);
 }));
