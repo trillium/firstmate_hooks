@@ -121,7 +121,7 @@ export function describeClosure(store, bead, comments, { captain = true } = {}) 
       ? `Hold bead ${bead.id} closed by firstmate (not a captain answer)`
       : key
         ? `Captain answered hold ${bead.id}`
-        : `Captain closed ${store} bead ${bead.id}`;
+        : `${store} bead ${bead.id} closed (closer unknown: captain or an agent)`;
   return { task: firstmateClose ? null : task, key: firstmateClose ? null : key,
     requestId: `bead-${bead.id}-${hash}`.replace(/[^A-Za-z0-9_.-]/g, '_'),
     text: `${head} (${clip(bead.title ?? '', 120)}): ${answer ? clip(answer, 1500) : 'closed without a comment'}` };
