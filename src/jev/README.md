@@ -24,6 +24,27 @@ Test: `bun test test/jev.test.ts`; live smoke with `JEV_LIVE=1`.
 
 The question id is the eval-log `question_id`, so `recordOutcome(requestId, 'worker-status/state', ...)` joins the later outcome. Fixtures with hand labels live in `test/fixtures/jev/v1/<pack>/`; `JEV_LIVE=1 bun test test/jev-questions.test.ts -t "live smoke"` prints correct/total per pack.
 
+## Inbox route
+
+`src/jev/inbox-route.ts` is a shadow destination pack beside `store-route`.
+It is not in `PACKS`: its choice list is rebuilt from a secondmates registry on every call, so a frozen entry would drift.
+`classifyInbox(bead, mates)` is pure.
+Layer 0 (confidence 1) is a `to:<mate>` label or a leading `ROUTE TO:` line.
+Aliases on that text are `fixer` = `macbook-ops`, `zephyr` = `mini0-ops`, and `mayor` = `primary`.
+An unknown or unregistered id is `captain-review` and is not an executor.
+Layer 1 (confidence 0.9) matches a short captain-review pattern list and does not fire on the word "review" alone.
+Layer 2 (confidence 0.8) matches a mate's `projects:` list, then the phrase table in that file.
+Two mates on one bead return `primary` and list both hits.
+Anything else is `primary` with rationale `low-confidence`.
+`shadowInboxRoute(bead, { registryText | registry, logPath })` classifies and appends one `kind: "inbox-route"` line (owner, layer, confidence, rule id, rationale, delegate `none`).
+It does not call `fm-send.sh` or `fm-backlog-handoff.sh`.
+It does not create a task, review, or steer.
+`INBOX_ROUTE_ACT` is ignored.
+`buildInboxRoutePack(mates)` is the layer-3 choice question at floor 0.6, including `other`.
+Shadow mode does not ask it.
+`other` never becomes the owner.
+Run it with `bun -e` against a temp log, for example `import { shadowInboxRoute } from './src/jev/inbox-route.ts'` and pass `registryPath` plus `logPath`.
+
 ## Cascade
 
 `src/jev/cascade.ts` exports `decide(pack, raw, opts)`, which sits on `askPack` and returns `{ verdict, layer: 'jev' | 'big' | 'human', confidence, jev?, big?, requestId, reason, humanId }`.

@@ -1,0 +1,214 @@
+[
+  {
+    "id": "inbox-8ckg",
+    "title": "Talon agent-switch re-entry card on Sidecar: phase 1 (route to macbook-ops secondmate, fixer)",
+    "labels": [
+      "fixer",
+      "project:sidecar",
+      "project:trillium-talon",
+      "to:macbook-ops"
+    ],
+    "description": "ROUTE TO: the macbook-ops secondmate (the captain calls it \"fixer\"). It owns Sidecar (local-only Go repo at fm_home/macbook-ops/projects/sidecar). Do not route to displayd (older Python daemon) and do not clone Sidecar into any other home.\n\nFILED 2026-10-24 by the mini0-ops firstmate on the captain's instruction. The captain is still planning the rest with mini0-ops; further decisions arrive as comments on this bead. Phase 1 below is cleared to begin.\n\nTHE CAPTAIN'S WORDS (verbatim, voice-dictated):\n\"I have my MacBook as my development environment right now. I'm using Talonvoice through it and I am running into problems of recollection of where I am, which is hard for me. Basically, it's easy for me to lose focus for what's exactly going on because I'm trying to work on many things at once, but I have just implemented the recall system to change windows. So I'm saying words like mayor, fixer, zephyr, often, which are the names of programming windows. ... it would be really great if in my talon setup that actually emitted an event that the sidecar stream could process to show me information about what I've been trying to do in that particular agent window given what I have said.\"\nThen: \"Dispatch an agent to begin on the first part\" and \"make sure to note that it should go to the second mate ops one, which is fixer\".\n\nPROBLEM (evaluation): not forgetting; each voice switch lands him in an agent window with no goal cue, so he re-reads to rebuild context. Each switch is the right moment to show a re-entry card.\n\nTHE SYSTEM, NEEDED REGARDLESS: (1) a switch trigger: Talon fires when an alias is spoken (agent, time, spoken alias); (2) a last-seen record per agent plus what he last said to it; (3) turning agent activity into facts (deterministic extraction; see data/turn-summarizer-deterministic/report.md on mini0, recommends fields not sentences, ~1 ms, never invents identifiers); (4) alias to agent mapping that survives restarts (herdr tab/pane ids change; plugin/recall/herdr_focus.py already resolves by agent name or cwd); (5) fast (about 1 s), non-blocking, fail-silent, local-only (transcripts hold secrets, show fields only); (6) some surface that shows it.\nPREFERENCE, NOT NEEDED: where it shows (Sidecar, terminal overlay, phone, spoken aloud via Kokoro), exact fields and density, Sidecar event-stream column, LLM polish (measured not worth it), \"while you were away\" alerts, history, per-task grouping, an on-demand \"where am I\" voice command (nearly free; consider it).\n\nPHASE 1 (begin here; no Sidecar code changes): in the Talon recall plugin (trillium_talon/plugin/recall/herdr_focus.py, action herdr_focus_tab), after the focus succeeds, fire an async non-blocking step that builds a small re-entry card for that agent and puts it on a Sidecar pane with the existing POST /v1/show (docs/show.md, docs/api.md; local markdown or HTML file). Card fields, fixed and short: (a) what he last asked this agent; (b) what it did since; (c) its state: working, waiting on him, or blocked; (d) what changed since he last looked. Inputs: Talon utterance history for that agent, the agent's session transcript tail and status files, herdr agent state. Sidecar invariant must hold: the device reports its viewport, Sidecar owns layout, the card never scrolls, so keep it small. The switch command must never be delayed or broken by this; any failure is silent.\nPHASE 2 (not yet): proper event emission and a Sidecar stream column, plus \"since you left\" deltas. Needs a Sidecar generic event-ingest route; the README says the stream server side still lives in displayd, so confirm what exists first.\n\nFIRST QUESTIONS FOR THE OWNER: who owns the Talon repo (trillium_talon); what does \"what I have said\" cover (voice commands only, or typed text too: the captain has not answered; default to voice commands and say so); what does the macbook-ops backlog already hold on Sidecar.\nGUARDRAILS: Sidecar is local-only: never push, no remote. Never print or store transcript text beyond what the card needs; keep it on the MacBook. Conventional commits, no tags.",
+    "expect": "macbook-ops",
+    "actual": "macbook-ops",
+    "layer": 0
+  },
+  {
+    "id": "inbox-0isi",
+    "title": "Primary First Mate: drain and delegate every open inbox bead",
+    "labels": [],
+    "description": "The Captain reports that open inbox beads indicate a workflow failure. The primary First Mate is responsible for promptly taking ownership of incoming inbox beads, triaging them, and delegating actionable work to appropriate agents/sub-agents rather than leaving requests sitting open. Immediately inspect ALL currently open inbox beads (at least inbox-ttum, inbox-wjut, inbox-kr1s, inbox-ehym, inbox-8ckg, inbox-490z, inbox-omji, inbox-cglf, inbox-kv6b, plus this bead and any newly arrived). Assign an executor and concrete next action to each, dispatch through the normal workflow, record ownership and links to delegated work, and close/resolve the inbox bead when accepted and tracked elsewhere. Escalate only genuine Captain decisions or blocked items to the status feed. Implement and verify a durable intake/dispatch process that prevents inbox backlog, including monitoring, retry/escalation, and tests. Report a reconciliation of all open inbox beads with their delegates and disposition. Do not merely close items without ensuring work is tracked and assigned.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-902i",
+    "title": "Investigate classifier-based routing of inbox beads to the appropriate First Mate or Second Mate",
+    "labels": [],
+    "description": "Research existing Beads records, First Mate/Second Mate routing tools, dispatch capabilities, agent registries, and prior experiments before designing anything new. Captain wants incoming inbox beads classified by likely best executor, rather than automatically assigning every item to the primary First Mate. Determine whether each bead should go to primary First Mate, a specific Second Mate (e.g. macbook-ops), another authorized agent, or Captain review. Consider task subject, project, repository, device, required capabilities, agent ownership, availability, current load and usage-limit state; allow explicit destination overrides such as to:macbook-ops. Propose a classifier with confidence/explanation, low-confidence fallback, auditable routing decisions, safe handoff/acknowledgment, idempotent dispatch, rerouting on failure/usage-limit hit, and no lost or duplicated tasks. Evaluate existing implementations and identify reuse vs gaps. Test against actual inbox examples including inbox-8ckg and other currently open beads; report predicted owner, rationale, and verification of assignment. Integrate with durable inbox drain/recovery protocol inbox-0isi. Create implementation tasks and measurable acceptance tests; do not treat mere classification as successful delegation.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-ttum",
+    "title": "Build First Mate Urgency Protocol  -  interactive captain-facing execution agent",
+    "labels": [],
+    "description": "# First Mate Urgency Protocol  -  Captain's request\n\n## Problem and purpose\nI needed six separate print-ready QR-code PDFs, each with a unique code, for a time-sensitive in-person marketing event. An agent made a tear-off sheet instead, and First Mate's brief-writing and asynchronous delegation consumed the time available for correction. I left the event without the materials. The underlying friction is that First Mate's normal delegation process is too slow for immediate tasks. This is a process problem, not merely a prompt-clarity problem.\n\n## Architecture\nFirst Mate recognizes an immediate task and promptly launches a temporary, captain-facing interactive Urgency Agent, passing the relevant context and bounded authority. The Urgency Agent is a powerful hands-on worker, not a second First Mate or another orchestration layer. I converse directly with it, clarify requirements, inspect deliverables, and request corrections in real time. First Mate stays out of the critical execution path after launch. Normal delegation remains available for nonurgent tasks.\n\n## Native sub-agent authorization\nThe Urgency Agent's initial configuration EXPLICITLY PREAUTHORIZES use of native sub-agents. In Claude Code it may invoke Claude Code's built-in sub-agents; in Pi it may use its enabled native/installed sub-agent mechanism, and similarly in other runtimes. It must not create First Mate delegation briefs, launch separate First Mate-managed workers for internal subtasks, or follow the normal First Mate delegation/reporting cycle. It operates within its authorized scope and native runtime guardrails; actions outside the grant require my direct authorization.\n\n## Lifecycle\nThe agent works in an accessible interactive window until I explicitly declare the task complete, or a configurable inactivity timeout occurs (ten hours was a suggestion, not a finalized requirement). Preserve outputs and useful context before cleanup. Avoid repetitive checks for already-authorized actions.\n\n## Desired result\nI can request immediate execution, get a capable interactive worker promptly, use preauthorized native sub-agents, iterate directly, and receive correct artifacts before my real-world deadline. The feature is only accepted after I, the captain, approve the actual workflow.\n\n## Verification tests\n1. Immediate launch: request urgent work; verify direct access to an interactive agent without a background briefing queue; measure time to session.\n2. Claude Code: verify native sub-agent execution within its session, without First Mate briefs.\n3. Pi: with native/installed sub-agents enabled, verify analogous execution without First Mate delegation.\n4. Permissions: verify in-scope actions proceed without repeated approvals and out-of-scope actions request my direct authorization.\n5. QR regression: generate six separate print-ready PDFs with six distinct QR codes; inspect uniqueness, scan destinations, layout, and interactive corrections.\n6. Latency: compare time to session, first usable artifact, correction, and accepted completion against standard delegation; agree on thresholds with me.\n7. Lifecycle: test explicit completion, output retention, configurable idle timeout, cleanup and recovery.\n8. Fallback: if native sub-agents or interactive windows are unavailable, report that immediately rather than silently reverting to slow delegation.\n9. Captain signoff: I verify a realistic urgent task meets my deadline and approve the result.\n\n## Open design questions\nUrgency detection versus explicit invocation; runtime selection; authority transfer; interactive window mechanics; capability discovery; timeout and resumption; output preservation; failure handling. Prototype the core workflow without waiting for every question to be settled.\n\n## Definition of done\nI can reliably launch an interactive urgency worker, direct it live, use preauthorized native sub-agents, receive correct time-sensitive deliverables, close the session, and explicitly sign off as captain.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-wjut",
+    "title": "Add native date filtering and sorting to Beads MCP query tools",
+    "labels": [],
+    "description": "Extend the existing beads-bridge MCP query tools, especially query_store, to support server-side date filtering and sorting. Add created_at, updated_at, and published_at (where applicable) filters with before/after or date-range bounds; order_by and ascending/descending parameters. Default status-feed retrieval for the Captain should prioritize most recently published or updated activity, regardless of P0/P1/P2 priority. Support reliable pagination/cursors so results are complete beyond the current 50-record limit, with stable ordering and timestamps in results. Preserve existing query behavior for callers that omit these options. Add tests for date bounds, ties, pagination, and status-feed newest-first behavior. Update MCP schema/documentation and verify availability through ChatGPT MCP Jungle after deployment. Related workflow: inbox-xi2i.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-490z",
+    "title": "Review security and integrate claude-code-voice-mod",
+    "labels": [],
+    "description": "Evaluate https://github.com/samgutentag/claude-code-voice-mod for security before integration. Review its hook scripts, dependency chain, permissions, network/API handling for Deepgram, secret handling, and any commands or filesystem changes. Record findings and mitigations. Only after the security review is complete and acceptable, integrate the project into the Claude Code voice workflow and verify that narration works as intended. Do not integrate before the review passes.",
+    "expect": "captain-review",
+    "actual": "captain-review",
+    "layer": 1
+  },
+  {
+    "id": "inbox-cglf",
+    "title": "Activate Apple Notes MCP and deactivate first MCP tools in MCP Jungle",
+    "labels": [],
+    "description": "Please activate and configure Apple Notes MCP tools in MCP Jungle so they are available to connected agents. Also deactivate the \"first MCP tools\" currently enabled inside MCP Jungle. Before changing anything, identify the exact MCP server/tools meant by \"first MCP tools\" and confirm the target; do not disable unrelated tools. Report what was activated/deactivated, how availability was verified, and any blockers. This inbox requests the change; it does not authorize exposing credentials or making unrelated configuration changes.",
+    "expect": "captain-review",
+    "actual": "captain-review",
+    "layer": 1
+  },
+  {
+    "id": "inbox-kv6b",
+    "title": "Product judgment: state the claim you want evidenced (follow-up to the PostHog mapping)",
+    "labels": [],
+    "description": "",
+    "expect": "captain-review",
+    "actual": "captain-review",
+    "layer": 1
+  },
+  {
+    "id": "inbox-kr1s",
+    "title": "Build: lock-holder vs read-only firstmate pane tags (task-87bw3)",
+    "labels": [],
+    "description": "Captain approved the plan on task-87bw3 (2026-10-26). Build it: (1) fm-session-start.sh tags its own Herdr pane after the lock step - token fm_lock='LOCK HOLDER' or fm_readonly='READ-ONLY' plus --display-agent 'firstmate (lock)'/'firstmate (read-only)' for the border label (pattern: bin/fm-herdr-groups.sh report-metadata); (2) ~/.config/herdr/config.toml claude row styles fm_lock blue+bold, fm_readonly amber, then herdr server reload-config; (3) clear/flip tags on lock release or later acquire so no stale label. Full findings in task-87bw3 comments. Firstmate change ships via the normal firstmate PR path.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-omji",
+    "title": "check to see if any of the firstmate changes we ahve made can be upstreamed?",
+    "labels": [],
+    "description": "eval what we have\ncherry pick changes\nfork off upstream/main\nrun pr upstream via no-mistakes\n",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-ehym",
+    "title": "Create Research Store for Voice and Language Model Training",
+    "labels": [],
+    "description": "Request for the agent handling this bead: create a dedicated research knowledge store to collect, organize, and retrieve research documentation, academic papers, white papers, and technical references on speech recognition, dictation, voice model training, large language model training, and related machine-learning methods. Establish a clear structure for sources, citations, summaries, topics, and ongoing additions so this becomes a durable research library supporting Open Speech Model Development (project-he8k). Include research on distributed/federated training and user-contributed compute as an initial topic, but the store must cover the broader research domain. This bead requests creation of the research store, not execution of the research itself.",
+    "expect": "primary",
+    "actual": "mini1-ops",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-plds",
+    "title": "Rename Firstmate Share iPhone App to Agentic and Add Beads Sharing",
+    "labels": [],
+    "description": "Enhance the EXISTING iPhone app Firstmate Share (project-p16v); do not build a replacement app. Rename/rebrand the app to 'Agentic'. Expand the iOS share-sheet workflow so a user can send shared content to First Mate, to Beads/brain stores, or to BOTH destinations in one action (AND/OR). Preserve current First Mate sharing and poke behavior. Research existing app/repository and Beads federation/store interfaces before implementing; identify how to choose target store(s), create an appropriate bead or brain entry with shared text/URLs/files and metadata, handle attachments, and confirm delivery independently per destination. Design a simple accessible share extension UI with clear destination selection and sensible defaults; support offline/error handling, authentication, deduplication, and retry without duplicate submissions. Clarify whether 'brain stones' means brain stores/Beads stores; use existing architecture rather than inventing a new backend. Acceptance: app visibly named Agentic, share to First Mate only, Beads only, and both; each route persists and reports its own success/failure; regression tests for existing share flow. Coordinate with project-p16v and iOS umbrella project-xvzw; link implementation work to the existing project and avoid duplicates.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-zjz8",
+    "title": "Build MVP of Standalone Parrot-Enabled Web Browser",
+    "labels": [],
+    "description": "Captain explicitly requests a working MVP now, not just research/design. First Mate: deduplicate against any existing implementation task before dispatch; if one already exists, adopt and prioritize it rather than build twice. Related inbox-1j44 (standalone browser, NOT Safari extension), inbox-3kt1 (shared voice/sound platform), and completed design scout brain-fmhscout-voice-sound-platform-design-q1. Build a usable standalone browser with Parrot sound recognition integrated, using the captain's existing trained Parrot model where technically feasible without retraining or repeated downloads. Core MVP: load and navigate real webpages; microphone permission and listening on/off; detect configured lip pops/clicks; map them to scroll/page up/down with adjustable bindings; visible recognition feedback; simple setup and diagnostic screen; graceful failures. Favor the fastest viable platform from the design scout and explicitly document platform selection, model format/runtime, latency, security (do not load untrusted pickle), constraints, and any unsupported reuse path. Prioritize a working end-to-end vertical slice over broad platform infrastructure or Rango/grammar expansion. Acceptance tests: browse several real pages, verify pop/click scroll in both directions, configure mappings, reuse existing model, show false positives/latency, repeat after restart; document build/run steps and remaining gaps. Report actual working demo, tests, and blockers to this bead. Coordinate with project-xvzw and existing Parrot projects; create project implementation child as appropriate.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-0sza",
+    "title": "Research Shared Voice and Sound Interactions Across iOS Apps",
+    "labels": [],
+    "description": "Urgent research request: determine how independently developed iPhone/iOS applications can share voice commands, user-defined grammar, sound-recognition models, and standardized navigation actions. Explore a reusable library of Talon Hub community-compatible interactions (next, previous, select, back, etc.) that participating apps can adopt, reusing speech/sound models already available on the phone rather than redownloading or retraining them. Investigate feasible iOS mechanisms and restrictions for model sharing, app-to-app interoperability, shared settings/grammars, SDKs, app groups, extensions, background execution, accessibility APIs, and navigation within versus between apps. Explicitly distinguish realistic in-app navigation from unsupported system-wide control. Compare architecture options, security/privacy constraints, and developer integration effort. Recommend the smallest practical proof of concept, tests, and a go/no-go conclusion with primary-source Apple documentation and relevant Talon/Parrot references. Coordinate with shared platform concept inbox-3kt1 and browser concept inbox-1j44; avoid duplicating their scope.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-3kt1",
+    "title": "Shared Voice and Sound Control Platform Across Applications",
+    "labels": [],
+    "description": "Explore a reusable platform for voice and sound interaction across connected applications, including iPhone apps and a web browser. Provide shared user-defined voice grammar and vocabulary so custom command choices carry across apps (e.g., user says 'Risk' for letter R instead of 'Red'). Support Rango-style selection of on-screen links and controls, potentially with labeled/numbered targets, and investigate a configurable grammar as a platform-level capability. Integrate reusable/composable Parrot sound recognition and user-trained models so applications can share sound triggers without repeated training or model downloads. The standalone Parrot-enabled browser concept is captured in inbox-1j44; explicitly connect and coordinate that browser bead as an early consumer/proof of concept of this platform. Investigate shared configuration, interoperability, accessibility, and platform constraints before deciding implementation.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-1j44",
+    "title": "Safari Sound-Controlled Page Navigation with Composable Parrot Model",
+    "labels": [],
+    "description": "Explore and implement a Safari browser application or extension that lets users navigate pages hands-free using configurable mouth sounds, such as pops and clicks mapped to Page Up and Page Down. The sound-recognition model must be composable: users should be able to reuse an existing Parrot/chaosparrot.py-compatible personal sound model rather than retraining or downloading a duplicate model for every application. Investigate the feasible Safari integration surface, how to load or connect a user's model, map recognized sound events to browser scrolling/navigation actions, and expose simple configurable bindings. Keep the scope focused on a working Safari proof of concept and document compatibility constraints and acceptance tests. Related to Open Speech Model Development / Voice-Native Gaming (project-he8k.1), but captured as an inbox request for triage.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-warc",
+    "title": "Transcribe MIT Speech Recognition Lecture, Build Glossary and Speaker Records",
+    "labels": [],
+    "description": "Process the lecture at https://www.classcentral.com/course/youtube-mit-6-s191-automatic-speech-recognition-128076 (MIT 6.S191 Automatic Speech Recognition, listed as Alexander Amini, 42 minutes). Locate the underlying video, slides and available captions; produce a complete, accurate timestamped transcription where legally and technically permitted, with attribution and source links, and verify uncertain technical words against the audio/slides. Extract technical terms actually used in the lecture into a linked, accessible plain-language glossary with definitions, examples, timestamps and relevant context; distinguish terms from ordinary language and avoid invented terms. Identify ALL actual presenters/speakers from video and final slide, not merely the course listing; inspect the last slide directly and capture any publicly displayed professional email addresses exactly as shown, verifying association with the right person. Create or update person records in the appropriate brain/people store, deduplicating existing records, citing the lecture/slides as provenance. Do not guess names or email addresses if unreadable or absent; flag uncertainty. Save transcript and glossary in the research/learning knowledge library if appropriate, cross-link the speaker person records and source. Report deliverables and any rights/access constraints or missing material to this inbox bead. Related project-qbgb learning roadmap and project-he8k speech research.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-30v1",
+    "title": "Resolve upstream merge conflicts: firstmate main <- upstream/main",
+    "labels": [],
+    "description": "upmerge found conflicts merging upstream/main into main.\nRepo: <path>\nHEAD: 6e2014d0  upstream/main: 127f0f30\n77 ahead, 55 behind.\n\nConflicting files:\n  bin/fm-control.sh\n  bin/fm-dispatch-resolve.sh\n  bin/fm-spawn.sh\n  bin/fm-teardown.sh\n  bin/fm-test-run.sh\n  bin/fm-wake-drain.sh\n  docs/configuration.md\n  docs/verification/dispatch-resolve.md\n  tests/fm-backend-herdr-presentation-e2e.test.sh\n  tests/fm-backend-tmux-smoke.test.sh\n  tests/fm-pr-check-security.test.sh\n\nRe-check with: upmerge check   Merge once clean: upmerge go",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-t4bz",
+    "title": "Make tldraw-deck slide screenshot previews a durable, repeatable workflow",
+    "labels": [],
+    "description": "Extend the existing tldraw-deck slide screenshot effort (inbox-af2d, tldraw-slide-shots, project-fmh-tldraw-deck). Do not treat screenshots as a one-time deliverable. Build and document a durable, repeatable command/script/workflow in the tldraw-deck repository that can be run on demand whenever slides, layouts, live panels, or presentation configuration change. It should start or connect to the real presentation, enumerate every slide from slides.config.json in current order, navigate to each intended camera framing in presentation mode, wait for animations/render and live-panel readiness with explicit timeout/error reporting, capture one clearly named screenshot per slide, and regenerate an easy-to-browse indexed gallery/contact sheet with slide number, title, capture timestamp, and live/mock/error status. Make output paths predictable, avoid stale screenshots, and preserve snapshots when desired. Include exact one-command usage, dependencies, setup, cleanup, security/redaction for sensitive live data, reproducibility and smoke tests, and a clear way to inspect artifacts from ChatGPT or another accessible location. Verify by running the workflow and reporting the resulting artifacts. Coordinate with the in-progress scout and link its output; avoid duplicate implementations. Ensure this remains useful after future slide additions/reorders/edits.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-af2d",
+    "title": "Create private GitHub remote for tldraw-deck and capture screenshots of every planned presentation slide",
+    "labels": [],
+    "description": "For the existing local-only tldraw-deck project (local main commit 6d23361; see inbox-sqq4 and brain-a0tlq), create a PRIVATE GitHub repository/remote, verify privacy and access permissions, push the existing main branch and relevant history, and verify the remote tracks the correct commit. Do not make the repository public or expose secrets, tokens, private event data, or local-only files; inspect gitignore and tracked content before pushing. Then run the actual tldraw spatial presentation MVP and capture an individual screenshot for EVERY currently configured slide in slides.config.json, in presentation mode at its intended camera framing, in the existing order. Include slide number, title, screenshot path, and brief explanation of visible content; distinguish real/live data from placeholders or unavailable integrations. Provide an easily browsable index/contact sheet or gallery plus individual screenshots, with accessible artifact locations and clear instructions for reviewing them. If a remote cannot be created because of missing authorization, report the precise blocker and next action. If screenshots cannot be captured, report exact blockers and do not substitute imagined visuals. Attach completion evidence and links/paths to this inbox bead and durable Brain report. Coordinate with existing tldraw-deck work and preserve the MVP.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-qdy7",
+    "title": "Investigate GitHub MCP tools: implementation results and ChatGPT MCP Jungle authorization",
+    "labels": [],
+    "description": "Investigate the GitHub MCP tools reportedly created within the past week. Identify the original work items, implementation outcomes, tool names, repository/commit or deployment evidence, tests and results. Determine whether the tools are registered and authorized in MCP Jungle specifically under the ChatGPT connector for beads-bridge, and whether they are visible and callable in ChatGPT. Distinguish built, deployed, registered, authorized, and exposed states. If missing, identify exact blocker and concrete next steps to enable them. Report findings with references and verification evidence; do not assume the older September GitHub activity capability is the target.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-xi2i",
+    "title": "Route all items requiring my review or action into the status feed",
+    "labels": [],
+    "description": "Establish a durable workflow across Beads stores, Firstmate tasks, reports, and agent work: whenever an item needs my attention, decision, approval, review, input, or hands-on action, publish or update a corresponding actionable entry in the status feed. Include a concise title, why I need to look, the exact requested action or decision, priority/urgency, source bead/task link or ID, relevant evidence/artifacts, and current state. Keep status entries synchronized as work changes; avoid duplicate entries and remove/resolve them when no longer actionable. Cover existing outstanding items as well as future ones. Do not silently bury captain/user-required actions in reports, comments, or review stores alone. Verify with examples, including current tldraw-deck slide review/license decisions, and document how the routing runs and how to audit missed items.",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": "fallback"
+  },
+  {
+    "id": "inbox-em8o",
+    "title": "Explore Atlassian auth for <email>: Interceptor stable login vs MCP, for DSD Mighty Discord status summaries",
+    "labels": [],
+    "description": "ROUTE TO: the first mate (Mayor), who runs on the MacBook. Filed 2026-10-26 by mini1-ops on the captain's instruction. The captain judged this belongs on the MacBook because the browser sessions and accounts are there.\n\nScout task: explore how to get authenticated access to Atlassian for the <email> account, so a DSD Mighty activity-summary tool can read the team's Atlassian task panel (Jira board or equivalent).\n\nOptions to evaluate:\n- Interceptor stable, using the account's existing active browser login.\n- Atlassian MCP tools (for example Atlassian's remote MCP server) or another MCP route.\n- Any other workable route, such as an Atlassian API token.\nFor each option, note the setup steps, which credential it needs and where that credential would live, what it can read, and its risks. Recommend one. Getting the authentication working is part of the ask, not only the comparison.\n\nWider goal, for context: the captain wants a tool that summarizes activity on the DSD Mighty team repository (github.com/dallassoftwaredevelopers/cohort-team-2026-dsd-mighty, the CYC26 cohort Property Bill Automation project) over time, plus Atlassian task-panel activity if possible, and posts periodic status updates to the DSD Mighty Discord channel. There is no Discord bot in that channel; posting by driving Discord through Chrome DevTools is acceptable. Assume the Discord posting part will be solved. This bead covers the Atlassian authentication exploration.\n\nPer standing rule: answer on this bead (evidence, recommendation, verified state, next step) and close it when complete.\n",
+    "expect": "primary",
+    "actual": "primary",
+    "layer": 0
+  }
+]
