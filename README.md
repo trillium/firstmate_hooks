@@ -209,6 +209,14 @@ Anything that needs the captain's attention, decision, approval, review, input o
 
     bun bin/fm-hooks-captain-feed.ts sync [--dry-run] [--max-writes N]   # upsert now; prints a JSON summary
     bun bin/fm-hooks-captain-feed.ts audit [--json]                      # list drift; exit 1 when there is any
+    bun bin/fm-hooks-captain-feed.ts list [--json] [--all]               # open feed beads, newest activity first
+
+**Reading order.** `list` prints each open `captain-action` bead on one line: activity timestamp, priority, title, bead id.
+`--json` prints those four fields (`at`, `priority`, `title`, `id`), and `--all` includes closed beads.
+Activity time is `updated_at`, or `created_at` when `updated_at` is missing or blank.
+Equal times break by priority ascending (P0 before P1), then bead id.
+Plain `status list` orders by priority; read the feed with `list`.
+Sync rewrites a bead only when its title, body, or priority changed, so an unchanged item does not bump `updated_at`.
 
 **Sources (read-only).** (a) open beads in `review`; (b) open beads labelled `human` in every store `brain stores list` names (except `status`, plus any in `FM_HOOK_CAPTAIN_FEED_SKIP`); (c) Firstmate captain holds from `bin/fm-tasks-axi.sh list --state held` (hold kind `captain`) and PRs awaiting the captain's merge from `bin/fm-bearings-snapshot.sh --json` (`contributions.captain`). A hold whose `review` bead (`fm-hold-task:<task>`) is already a source, and a PR already named by its hold, are not duplicated.
 
