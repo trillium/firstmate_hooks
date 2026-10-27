@@ -14,7 +14,8 @@ import { promisify } from 'node:util';
 //      `fm-tasks-axi.sh` / `fm-bearings-snapshot.sh --json` (never Firstmate's files)
 // Sink: one `status` bead per source item, labelled `captain-action` + `source:<key>`,
 // upserted by that key. When the source closes or stops needing the captain, the feed bead
-// is closed with a reason. `audit` reports drift in either direction without writing.
+// is closed with a reason. `list` prints the feed through `byRecency`. `audit` reports drift
+// in either direction without writing.
 
 export const FEED_LABEL = 'captain-action';
 export const SOURCE_PREFIX = 'source:';
@@ -205,8 +206,14 @@ export function renderBody(item: Item): string {
   ].join('\n');
 }
 
-export type Feed = { id: string; status: string; key: string; title: string; body: string; priority: number; group: string };
+export type Feed = {
+  id: string; status: string; key: string; title: string; body: string; priority: number; group: string;
+  updated_at?: string; created_at?: string;
+};
 
+const stampOf = (value: unknown) => (value == null ? '' : String(value).trim());
+
+// Store order. plan() keeps the first open bead per key, so this read must stay unsorted.
 export async function readFeed(run: Run, env: Record<string, any>): Promise<Feed[]> {
   const out = parseJson(String(await run(bin(env, FEED_STORE(env)), ['list', '--label', FEED_LABEL, '--all', '--limit', '0', '--json']) || '[]'), 'feed list');
   return asList(out).flatMap(bead => {
@@ -214,11 +221,50 @@ export async function readFeed(run: Run, env: Record<string, any>): Promise<Feed
     const key = labels.find(l => l.startsWith(SOURCE_PREFIX))?.slice(SOURCE_PREFIX.length);
     if (!key) return [];
     return [{ id: String(bead.id), status: String(bead.status ?? 'open'), key, title: String(bead.title ?? ''), body: String(bead.description ?? ''),
-      priority: priorityOf(bead.priority), group: labels.find(l => l.startsWith(GROUP_PREFIX))?.slice(GROUP_PREFIX.length) ?? '' }];
+      priority: priorityOf(bead.priority), group: labels.find(l => l.startsWith(GROUP_PREFIX))?.slice(GROUP_PREFIX.length) ?? '',
+      updated_at: stampOf(bead.updated_at), created_at: stampOf(bead.created_at) }];
   });
 }
 
 const isOpen = (feed: Feed) => feed.status !== 'closed';
+
+// Activity time for reading: updated_at, else created_at. Blank counts as missing.
+export function activityStamp(item: { updated_at?: string | null; created_at?: string | null } | null | undefined): string {
+  return stampOf(item?.updated_at) || stampOf(item?.created_at);
+}
+
+// Newest activity first. Equal times break by priority ascending, then id.
+export function byRecency<T extends { id: string; priority?: number | null; updated_at?: string | null; created_at?: string | null }>(items: readonly T[]): T[] {
+  const time = (item: T) => {
+    const stamp = activityStamp(item);
+    const parsed = Date.parse(stamp);
+    return stamp && !Number.isNaN(parsed) ? parsed : null;
+  };
+  return [...items].sort((a, b) => {
+    const left = time(a);
+    const right = time(b);
+    if (left !== null || right !== null) {
+      if (left === null) return 1;
+      if (right === null) return -1;
+      if (left !== right) return right - left;
+    } else {
+      const sa = activityStamp(a);
+      const sb = activityStamp(b);
+      if (sa !== sb) return sa > sb ? -1 : 1;
+    }
+    const pa = Number(a.priority);
+    const pb = Number(b.priority);
+    const priority = (Number.isFinite(pa) ? pa : 0) - (Number.isFinite(pb) ? pb : 0);
+    if (priority) return priority;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+
+export async function listFeed({ run = cliRunner(), env = process.env, all = false }: Record<string, any> = {}): Promise<Feed[]> {
+  const feeds = await readFeed(run, env);
+  return byRecency(all ? feeds : feeds.filter(isOpen));
+}
+
 export const CLOSE_REASON = 'source closed or no longer needs the captain';
 
 export type Plan = { create: Item[]; update: Array<{ feed: Feed; item: Item }>; reopen: Array<{ feed: Feed; item: Item }>; close: Feed[]; dupes: Feed[]; unchanged: number };

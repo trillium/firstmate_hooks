@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { audit, cliRunner, sync, withHome } from '../src/captain-feed.ts';
+import { activityStamp, audit, cliRunner, listFeed, sync, withHome } from '../src/captain-feed.ts';
 
 // fm-hooks-captain-feed sync  [--dry-run] [--max-writes N]   upsert the status feed from every captain-needed source
 // fm-hooks-captain-feed audit [--json]                       list drift; exit 1 when any source lacks a feed bead
 //                                                            or any feed bead's source has closed
-const USAGE = 'usage: fm-hooks-captain-feed sync [--dry-run] [--max-writes N] | audit [--json]';
+// fm-hooks-captain-feed list  [--json] [--all]               open feed beads, newest activity first (byRecency)
+const USAGE = 'usage: fm-hooks-captain-feed sync [--dry-run] [--max-writes N] | audit [--json] | list [--json] [--all]';
 
 const line = (item: { key: string; title: string; priority?: number }) => `  ${item.key}  ${item.title}`;
 
@@ -15,9 +16,15 @@ export async function main(argv: string[], { log = console.log, error = console.
   const flags = new Set(rest.filter(arg => arg.startsWith('--')));
   const maxIndex = rest.indexOf('--max-writes');
   const maxWrites = maxIndex >= 0 ? Number(rest[maxIndex + 1]) : Infinity;
-  if (!['sync', 'audit'].includes(command) || !(maxWrites > 0)) { error(USAGE); return 2; }
+  if (!['sync', 'audit', 'list'].includes(command) || !(maxWrites > 0)) { error(USAGE); return 2; }
   if (!env.FM_HOME) { error('fm-hooks-captain-feed: FM_HOME is not set'); return 2; }
   try {
+    if (command === 'list') {
+      const rows = await listFeed({ run, env, all: flags.has('--all') });
+      if (flags.has('--json')) log(JSON.stringify(rows.map(feed => ({ at: activityStamp(feed), priority: feed.priority, title: feed.title, id: feed.id })), null, 2));
+      else for (const feed of rows) log(`${activityStamp(feed)}  P${feed.priority}  ${feed.title}  ${feed.id}`);
+      return 0;
+    }
     if (command === 'sync') {
       const result = await sync({ run, env, maxWrites, dryRun: flags.has('--dry-run') });
       log(JSON.stringify(result));

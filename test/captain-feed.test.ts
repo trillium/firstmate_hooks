@@ -1,7 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { main } from '../bin/fm-hooks-captain-feed.ts';
-import { createFeedSyncer, parseTable, plan, renderBody, sync, audit } from '../src/captain-feed.ts';
+import { activityStamp, byRecency, createFeedSyncer, parseTable, plan, renderBody, sync, audit } from '../src/captain-feed.ts';
 
 // An in-memory fake of every store CLI plus the two Firstmate read scripts. Nothing real is touched.
 function world(init: Record<string, any> = {}) {
@@ -186,6 +186,60 @@ test('the worker syncer throttles, bounds writes, and swallows failures', async 
   assert.match(logs.join(''), /captain-feed sync failed/);
   const off = createFeedSyncer({ env: { ...env, FM_HOOK_CAPTAIN_FEED: '0' }, run });
   assert.equal(await off(), null);
+});
+
+test('byRecency puts newer activity first, then lower priority, then id', () => {
+  const row = (id: string, updated_at: string | null, created_at: string | null, priority: number) => ({ id, updated_at, created_at, priority });
+  const input = [
+    row('later', '2026-10-02T00:00:00Z', '2020-01-01T00:00:00Z', 2),
+    row('earlier', '2026-10-01T00:00:00Z', '2026-12-01T00:00:00Z', 0),
+    row('b-pri', '2026-10-02T00:00:00.000Z', '', 1),
+    row('a-pri', '2026-10-02T00:00:00Z', '', 1),
+    row('hi', '2026-10-02T00:00:00Z', '', 0),
+    row('fallback', '', '2026-10-03T00:00:00Z', 4),
+    row('missing', '   ', null, 0),
+  ];
+  const sorted = byRecency(input);
+  assert.deepEqual(sorted.map(item => item.id), ['fallback', 'hi', 'a-pri', 'b-pri', 'later', 'earlier', 'missing']);
+  assert.equal(activityStamp(sorted[0]), '2026-10-03T00:00:00Z');
+  assert.deepEqual(input.map(item => item.id), ['later', 'earlier', 'b-pri', 'a-pri', 'hi', 'fallback', 'missing']);
+});
+
+test('list prints open feed beads newest first and does not write', async () => {
+  const { state, run } = world();
+  const bead = (id: string, title: string, priority: number, status: string, updated_at: string | undefined, created_at: string, key: string) => ({
+    id, title, description: '', status, priority, updated_at, created_at,
+    labels: ['captain-action', `source:${key}`, 'src-store:review'],
+  });
+  state.status = [
+    bead('status-old', 'Captain: old', 0, 'open', '2026-10-01T00:00:00Z', '2026-09-01T00:00:00Z', 'old'),
+    bead('status-new', 'Captain: new', 2, 'open', '2026-10-20T00:00:00Z', '2026-10-01T00:00:00Z', 'new'),
+    bead('status-tie-b', 'Captain: tie b', 1, 'open', '2026-10-20T00:00:00Z', '2026-10-01T00:00:00Z', 'tb'),
+    bead('status-tie-a', 'Captain: tie a', 1, 'open', '2026-10-20T00:00:00Z', '2026-10-01T00:00:00Z', 'ta'),
+    bead('status-zzz', 'Captain: urgent tie', 0, 'open', '2026-10-20T00:00:00Z', '2026-01-01T00:00:00Z', 'zz'),
+    bead('status-fallback', 'Captain: fallback', 3, 'open', undefined, '2026-10-25T00:00:00Z', 'fb'),
+    bead('status-shut', 'Captain: shut', 0, 'closed', '2026-10-26T00:00:00Z', '2026-10-01T00:00:00Z', 'shut'),
+    { id: 'status-nolabel', title: 'nope', description: '', status: 'open', priority: 0, labels: ['other'], updated_at: '2026-10-27T00:00:00Z', created_at: '2026-10-01T00:00:00Z' },
+  ];
+  const lines: string[] = [];
+  const io = { env, run, log: (m: string) => lines.push(m), error: () => {} };
+  assert.equal(await main(['list'], io), 0);
+  assert.deepEqual(lines, [
+    '2026-10-25T00:00:00Z  P3  Captain: fallback  status-fallback',
+    '2026-10-20T00:00:00Z  P0  Captain: urgent tie  status-zzz',
+    '2026-10-20T00:00:00Z  P1  Captain: tie a  status-tie-a',
+    '2026-10-20T00:00:00Z  P1  Captain: tie b  status-tie-b',
+    '2026-10-20T00:00:00Z  P2  Captain: new  status-new',
+    '2026-10-01T00:00:00Z  P0  Captain: old  status-old',
+  ]);
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.status.length, 8);
+  lines.length = 0;
+  assert.equal(await main(['list', '--json', '--all'], io), 0);
+  const rows = JSON.parse(lines.join('\n'));
+  assert.deepEqual(rows.map((item: { id: string }) => item.id), ['status-shut', 'status-fallback', 'status-zzz', 'status-tie-a', 'status-tie-b', 'status-new', 'status-old']);
+  assert.deepEqual(rows[1], { at: '2026-10-25T00:00:00Z', priority: 3, title: 'Captain: fallback', id: 'status-fallback' });
+  assert.equal(await main(['list'], { env: {}, run, error: () => {}, log: () => {} }), 2);
 });
 
 test('renderBody and plan agree, so an unchanged item is never rewritten', () => {
