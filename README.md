@@ -123,6 +123,20 @@ Every one of these hooks only observes. None prints anything, none exits non-zer
 
 Claude's Bash input is a shell command string, not argv; args in normalized events are a conservative tokenization and `rawCommand` is authoritative. If the lifecycle event does not supply a call ID, the deterministic fallback key collapses identical commands in the same session.
 
+### UI-handoff guard (Stop, blocking)
+
+`src/ui-handoff-hook.ts` is the one Claude hook here that may block. On `Stop` it reads the agent's last message (`last_assistant_message`, else the transcript tail); when that message asks the human to perform a UI action the agent could drive itself ("can you click Approve", "go to Settings and tap Allow", "sign in and then click Authorize", "let me know once you've approved it on your phone") it blocks the stop **once** and tells the agent to load the UI runbook (`runbooks show runbooks-e8k`, plus `runbooks-84o` for iPhone UI), drive the page itself (mbb / `interceptor --context stable`, by tab and ref), check state first, and hand the human only the step that truly needs them after navigating them to exactly that point.
+
+It stays quiet for: reports of what the agent did, quoted or fenced text, negations ("no need to click"), and a genuinely human-only step (sign-in, 2FA, passcode, consent, cable, purchase) when the message already says the agent navigated there. A continuation (`stop_hook_active`) is always let through, so it cannot loop, and any error fails open. The detector is `src/ui-handoff.ts`; its table-driven cases are in `test/ui-handoff.test.ts`, so a new phrasing is one more row.
+
+Enable it for every Claude session on the machine (firstmate and workers) with one more `Stop` entry in `~/.claude/settings.json`, next to the observer; it is a separate command because the observer must never print:
+
+```json
+{ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": "/run/current-system/sw/bin/bun /absolute/path/fm-hooks/src/ui-handoff-hook.ts" }] }] } }
+```
+
+Disable it by removing that entry, or per process with `FM_UI_HANDOFF_HOOK=off`.
+
 ### OpenCode
 
 Install `src/opencode-plugin.ts` as a plugin at the OpenCode-supported project/global plugin location (for example, a project `.opencode/plugins/fm-hooks.ts` wrapper exporting this module). Configure `FM_HOOK_QUEUE` and `FM_HOOK_RULES` in the OpenCode process environment. The plugin observes `tool.execute.before` only to retain an in-memory start time, then observes Bash/shell `tool.execute.after`; it does not mutate hook inputs or outputs.
