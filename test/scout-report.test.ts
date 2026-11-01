@@ -238,3 +238,8 @@ test('backfill captures every report of every home once, files no review beads, 
 
   assert.equal(await go('--max-writes', '1', '--task', 'nothing-matches'), 0);
 }, { stores: STORES }));
+
+test('a store outage is an error, never "missing": nothing is created and the audit does not call a captured report absent', async () => withStubs(async ({ env, writes }) => {
+  assert.throws(() => write(storeRunner({ ...env, STUB_FAIL: 'brain:show' })), /stub failure|Command failed/);
+  assert.deepEqual(await writes(), []);
+}, { stores: STORES }));

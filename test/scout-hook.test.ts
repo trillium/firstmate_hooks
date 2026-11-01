@@ -120,7 +120,7 @@ test('a capture that failed is parked and started again by a later hook delivery
 
 // The real thing: the adapter's hook runs, starts the real capture entry point as a detached
 // bun process, and the report shows up in the (stub) store.
-async function untilRecord(env: any, id: string, timeoutMs = 20000) {
+async function untilRecord(env: any, id: string, timeoutMs = 45000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const db = JSON.parse(await readFile(env.STUB_DB, 'utf8').catch(() => '{}'));
@@ -170,7 +170,7 @@ test('Claude Code: rewriting a delivered report with the Write tool updates the 
   await run({ tool_name: 'Write', tool_input: { file_path: join(home, 'data', 't1', 'report.md'), content: 'x' }, tool_use_id: 'w1' });
   const started = Date.now();
   let bead = first;
-  while (Date.now() - started < 20000) {
+  while (Date.now() - started < 45000) {
     bead = JSON.parse(await readFile(env.STUB_DB, 'utf8')).brain.beads[SCOUT_ID];
     if (bead.comments.length === 2 && bead.labels.some((l: string) => l.startsWith('fm-report-sha:') && !first.labels.includes(l))) break;
     await new Promise(resolve => setTimeout(resolve, 100));

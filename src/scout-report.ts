@@ -139,8 +139,15 @@ const rowOf = (out: string) => {
   const parsed = out.trim() ? JSON.parse(out) : null;
   return Array.isArray(parsed) ? parsed[0] ?? null : parsed;
 };
+// null only when the store says the record does not exist; any other failure (the store
+// unreachable) propagates, so an outage is never read as "missing" (and never creates a duplicate
+// or reports a captured report as absent).
 function showRow(run: Run, id: string) {
-  try { return rowOf(run('brain', ['show', id, '--json'])); } catch { return null; }
+  try { return rowOf(run('brain', ['show', id, '--json'])); } catch (error) {
+    const text = `${error?.stderr ?? ''}${error?.stdout ?? ''}${error?.message ?? ''}`;
+    if (/no issue found|not found/i.test(text)) return null;
+    throw error;
+  }
 }
 const commentTexts = (run: Run, id: string): string[] => {
   const out = run('brain', ['comments', id, '--json']);
@@ -174,7 +181,7 @@ export function writeReport({ run, home, machine, task, text, reportPath, delive
       created = true;
     } catch (error) {
       // A concurrent capture can have created it between the read and the create.
-      row = showRow(run, id);
+      row = (() => { try { return showRow(run, id); } catch { return null; } })();
       if (!row) throw error;
     }
   }
