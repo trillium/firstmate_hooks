@@ -94,6 +94,28 @@ export function scrubText(value: unknown, max = 400, { keepNewlines = false }: {
   return text;
 }
 
+// Credentials out of long-form prose (a scout's report) with its paragraphs, paths and
+// numbers left as written. scrubText is built for one-line telemetry and also rewrites home
+// paths and any opaque 32-character word, which would damage a document people search by
+// path and identifier. This removes only the known token shapes, the header and URL forms
+// credentials travel in, and the value of a credential-named key when that value looks
+// like a secret: 8 or more characters with a letter and a digit, and not a path or URL.
+const looksSecret = (value: string) => {
+  const bare = value.replace(/^\\?["']|\\?["']$/g, '');
+  return bare.length >= 8 && /[A-Za-z]/.test(bare) && /\d/.test(bare) && !/^(?:https?:|\/|~|\.)/.test(bare) && !bare.includes('/');
+};
+
+export function redactSecrets(text: string): string {
+  let out = String(text);
+  for (const pattern of TOKEN_PATTERNS) out = out.replace(pattern, REDACTED);
+  out = out.replace(AUTH_SCHEME, `$1 ${REDACTED}`);
+  out = out.replace(URL_USERINFO, `$1${REDACTED}@`);
+  out = out.replace(KEY_VALUE, (whole, lead, value) => (looksSecret(value) ? `${lead}${REDACTED}` : whole));
+  out = out.replace(FLAG_VALUE, (whole, lead) => (looksSecret(whole.slice(lead.length)) ? `${lead}${REDACTED}` : whole));
+  for (const pattern of URL_TOKENS) out = out.replace(pattern, `$1${REDACTED}`);
+  return out;
+}
+
 // A filesystem path, kept usable as a join key on the machine that wrote it: only the
 // home prefix is rewritten to ~, so the reader expands it with its own home.
 export function scrubPath(value: unknown, max = 512): string | null {

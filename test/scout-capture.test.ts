@@ -4,7 +4,7 @@ import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runBeadAction, storeRunner } from '../src/bead-actions.ts';
 import { forgetEnsuredStores } from '../src/fleet-beads.ts';
-import { REPORT_COMMENT_CAP, captainCalls, scoutBeadId, scoutDone } from '../src/scout-capture.ts';
+import { captainCalls, scoutBeadId, scoutDone } from '../src/scout-capture.ts';
 import { tailStatusOnce } from '../src/status-tail.ts';
 import { withStubs } from '../testlib/stub-env.ts';
 
@@ -117,7 +117,7 @@ test('a report whose calls section says None files no review bead and records ca
   const result = await act(event, env);
   assert.deepEqual(result.reviews, []);
   const state = await db();
-  assert.match(state.brain.beads['brain-fmhscout-demo-scout'].description, /captain calls: 0$/);
+  assert.match(state.brain.beads['brain-fmhscout-demo-scout'].description, /captain calls: 0\n/);
   assert.equal(state.review, undefined);
 }, { stores: STORES }));
 
@@ -219,31 +219,34 @@ test('a tailed done line for a task with no report is a visible skip, not a capt
   assert.equal((await db()).brain, undefined);
 }, { stores: STORES }));
 
-test('the brain bead gets the full report as exactly one comment; a second capture adds none; cross-reference comments are unchanged', async () => withStubs(async ({ env, db }) => {
+test('the brain record gets the full report as one revision comment; a second capture adds none; cross-reference comments are unchanged', async () => withStubs(async ({ env, db }) => {
   await seed(env, { fleet: { beads: { 'fleet-demo-scout': bead('fleet-demo-scout') } } });
   const event = await scoutEvent(env);
   const first = await act(event, env);
-  assert.equal(first.reportComment, 'written');
+  assert.equal(first.action, 'created');
+  assert.equal(first.parts, 1);
   let state = await db();
-  let comments = state.brain.beads['brain-fmhscout-demo-scout'].comments;
-  assert.equal(comments.length, 1);
-  assert.ok(comments[0].text.startsWith('Scout report (demo-scout) - full text [scout-report:demo-scout]\n'));
-  assert.ok(comments[0].text.includes(REPORT));
+  let record = state.brain.beads['brain-fmhscout-demo-scout'];
+  assert.equal(record.comments.length, 1);
+  assert.ok(record.comments[0].text.startsWith(`Scout report (demo-scout, firstmate) - full text [scout-report rev=${first.rev} part 1/1]\n`));
+  assert.ok(record.comments[0].text.includes(REPORT));
+  assert.ok(record.labels.includes(`fm-report-sha:${first.rev}`));
+  assert.equal(record.issue_type, 'knowledge');
   assert.equal(state.fleet.beads['fleet-demo-scout'].comments.length, 1);
   const again = await act(event, env);
-  assert.equal(again.reportComment, 'already');
+  assert.equal(again.action, 'unchanged');
   state = await db();
   assert.equal(state.brain.beads['brain-fmhscout-demo-scout'].comments.length, 1);
   assert.equal(state.fleet.beads['fleet-demo-scout'].comments.length, 1);
 }, { stores: STORES }));
 
-test('a report longer than the cap is truncated with a note carrying the counts and the path', async () => withStubs(async ({ env, db }) => {
-  const long = `# Long\n\n${'x'.repeat(REPORT_COMMENT_CAP + 500)}`;
+test('a report longer than one part is stored whole, in order, with nothing cut', async () => withStubs(async ({ env, db }) => {
+  const long = `# Long\n\n${Array.from({ length: 30 }, (_, i) => `Paragraph ${i}: ${'x'.repeat(4000)}`).join('\n\n')}\n`;
   const event = await scoutEvent(env, { report: long });
-  await act(event, env);
-  const text = (await db()).brain.beads['brain-fmhscout-demo-scout'].comments[0].text;
-  const header = 'Scout report (demo-scout) - full text [scout-report:demo-scout]\n\n';
-  const note = `\n[truncated: ${REPORT_COMMENT_CAP} of ${long.length} characters; full report: ${join(env.FM_HOME, 'data', 'demo-scout', 'report.md')}]`;
-  assert.ok(text.endsWith(note));
-  assert.equal(text, header + long.slice(0, REPORT_COMMENT_CAP) + note);
+  const result = await act(event, env);
+  assert.ok(result.parts > 1);
+  const comments = (await db()).brain.beads['brain-fmhscout-demo-scout'].comments.map((c: any) => c.text);
+  assert.equal(comments.length, result.parts);
+  assert.equal(comments.map((text: string) => text.replace(/^[^\n]*\n\n/, '')).join(''), long);
+  assert.ok(comments.every((text: string, i: number) => text.includes(`part ${i + 1}/${result.parts}]`)));
 }, { stores: STORES }));

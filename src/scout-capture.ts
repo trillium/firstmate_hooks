@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { createOnce, exists } from './bead-actions.ts';
 import { FLEET_STORE, fleetId } from './fleet-beads.ts';
+import { machineName } from './origin.ts';
+import { homeName, readBundle, reportBeadId, terminalStatus, writeReport } from './scout-report.ts';
 
 // A scout's findings live only in data/<task>/report.md. Two signals say the scout is done,
 // and both run the same capture, keyed on the same deterministic bead id, so whichever
@@ -17,17 +19,18 @@ import { FLEET_STORE, fleetId } from './fleet-beads.ts';
 // The report's existence is what separates a scout from a ship task, whose `done` line is
 // not captured.
 //
+// A third trigger, scout-hook.ts, needs neither the ledger call nor a worker: the harness hook
+// reads the done line out of the Bash command itself and starts a one-shot capture.
+//
 // Writes, each safe to repeat (store state is the only memory, see bead-actions.ts):
-//   - one `brain` bead with a deterministic id per task: summary, report path, task id;
-//   - the full report text as one comment on that bead (capped, `[scout-report:<task>]`), so
-//     the finding is readable from the bead alone, not only from a path on one machine;
+//   - the report itself, in full, as one `brain` record per home and task (scout-report.ts:
+//     digest, ordered uncapped parts, a revision label, an update when the report changes);
 //   - a cross-reference comment, once, on `fleet-<task>` and on the backlog task bead;
 //   - one `review` bead per captain call the report lists.
 
 type Run = (store: string, args: string[]) => string;
 const hex = (value: string, length: number) => createHash('sha256').update(value).digest('hex').slice(0, length);
 const clip = (value: string, max: number) => (String(value).length > max ? `${String(value).slice(0, max - 1)}…` : String(value));
-const slug = (value: string) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 // The `[at=...]` stamp is whatever the crew's shell wrote there, not only digits: a crew that
 // runs `E=$(date +%s); echo "done [at=$E]: ..."` or inlines `[at=$(date +%s)]` has still
@@ -42,7 +45,8 @@ const CALL_LINE = /^\W*(captain calls?|needs captain input|captain decides?|capt
 const NEGATION = /^(?:none|nothing)\b|^no(?:\s|[.,;:!]|$)|^n\/a\b|^not applicable\b/i;
 const isNegation = (text: string) => NEGATION.test(text.replace(/[*_`]/g, '').replace(/^[^\p{L}\p{N}]+/u, ''));
 
-export const scoutBeadId = (task: string) => `brain-fmhscout-${slug(task)}`;
+// The id of a task's record in the original home; other homes carry the home in the id (reportBeadId).
+export const scoutBeadId = (task: string, home = 'firstmate') => reportBeadId(home, task);
 
 export function scoutDone(event: any) {
   if (event.operation !== 'fm-fleet-ledger.sh' || event.args?.[0] !== 'appended') return null;
@@ -79,40 +83,53 @@ export function captainCalls(report: string): string[] {
   return [...new Set(calls.map(call => call.replace(/\*\*/g, '').trim()).filter(Boolean))];
 }
 
-export const REPORT_COMMENT_CAP = 60000;
-
-const reportTitle = (report: string) => /^#\s+(.+)$/m.exec(report)?.[1].trim() ?? null;
-
 // `- [ ] <task> - title (inbox-yas4) ...`: the bead the backlog line names, if any.
 async function backlogBead(home: string, task: string) {
   try {
     const text = await readFile(join(home, 'data', 'backlog.md'), 'utf8');
     const line = text.split('\n').find(l => l.startsWith('- [') && new RegExp(`^- \\[.\\]\\s+${task.replace(/[^\w-]/g, '\\$&')}\\s`).test(l));
     const id = line && /\(((?:task|inbox|brain|idea|ideas)-[a-z0-9]+)\)/.exec(line)?.[1];
-    return id ? { id, store: id.split('-')[0] === 'idea' ? 'ideas' : id.split('-')[0] } : null;
+    const repo = line && /\(repo:\s*([A-Za-z0-9._-]+)\)/.exec(line)?.[1];
+    return id ? { id, store: id.split('-')[0] === 'idea' ? 'ideas' : id.split('-')[0], repo: repo || null } : null;
   } catch { return null; }
 }
 
-// The capture itself, given a finished task and its done-line text. `home` is the Firstmate
-// home whose data/<task>/report.md is the scout's report. Every write is checked in the
-// store first, so the hook path and the status tail can both run this for one task.
-export async function captureScout({ run, env, home, task, line }: { run: Run, env: Record<string, string | undefined>, home: string, task: string, line: string }) {
-  const reportPath = join(home, 'data', task, 'report.md');
-  let report;
-  try { report = await readFile(reportPath, 'utf8'); } catch { return { skipped: `no report at ${reportPath} (not a scout)` }; }
+// The project a task worked on: the backlog line's `(repo: x)`, else the project directory
+// the task's meta file names.
+async function projectOf(home: string, task: string, backlog: { repo: string | null } | null) {
+  if (backlog?.repo) return backlog.repo;
+  try {
+    const meta = await readFile(join(home, 'state', `${task}.meta`), 'utf8');
+    const path = /^project=(.+)$/m.exec(meta)?.[1];
+    return path ? basename(path.trim().replace(/\/+$/, '')) || null : null;
+  } catch { return null; }
+}
 
-  const id = scoutBeadId(task);
+// The capture itself, for a delivered task. `home` is the Firstmate home whose
+// data/<task>/report.md is the scout's report. Every write is checked in the store first, so
+// the hook, the status tail, the rule action and the backfill can all run it for one task.
+//   line            the done line's text (the status file's last line when not given)
+//   reviews         file a `review` bead per captain call (a backfill must not)
+//   links           comment on `fleet-<task>` and the backlog bead (a backfill of old reports does not)
+//   requireTerminal skip unless the task's status is done / needs-decision (or has no status
+//                   file): a report being written is not yet delivered
+export async function captureScout({ run, env, home, task, line, reviews = true, links: crossLink = true, requireTerminal = false }:
+  { run: Run, env: Record<string, string | undefined>, home: string, task: string, line?: string, reviews?: boolean, links?: boolean, requireTerminal?: boolean }) {
+  const reportPath = join(home, 'data', task, 'report.md');
+  const bundle = await readBundle(home, task);
+  if (!bundle) return { skipped: `no report at ${reportPath} (not a scout)` };
+  if (bundle.optedOut) return { skipped: 'opted out (first line <!-- no-brain -->)' };
+  const status = await terminalStatus(home, task);
+  if (requireTerminal && !status.terminal) return { skipped: `not delivered yet: status is ${status.state}` };
+
   const fleet = fleetId(task);
   const fleetStore = FLEET_STORE(env);
   const backlog = await backlogBead(home, task);
-  const calls = captainCalls(report);
-  const title = reportTitle(report);
-  const summary = line.replace(/^report written at \S+;?\s*/, '') || line;
-  const wrote = createOnce(run, 'brain', id, {
-    title: `Scout report: ${task}${title ? ` - ${clip(title.replace(/\s*\(.*$/, ''), 80)}` : ''}`,
-    type: 'task', priority: 3, labels: ['fm-hooks', 'fm-scout-report', `fm-task:${task}`],
-    body: `${clip(summary, 1500)}\n\nreport: ${reportPath}\ntask: ${task}\nfleet bead: ${fleet}\n`
-      + `${backlog ? `backlog task: ${backlog.id}\n` : ''}captain calls: ${calls.length}` });
+  const calls = captainCalls(bundle.text);
+  const written = writeReport({ run, home, machine: machineName(env), task, text: bundle.text, reportPath, deliverables: bundle.deliverables,
+    line: line ?? status.line, calls: calls.length, project: await projectOf(home, task, backlog) });
+  const id = written.id;
+  const wrote = written.action === 'created';
 
   // Cross-references are comments, written once each, found by a per-task marker.
   const tag = `[scout:${task}]`;
@@ -124,26 +141,10 @@ export async function captureScout({ run, env, home, task, line }: { run: Run, e
     if (!seen) run(store, ['comments', 'add', target, `fm-hooks: scout ${task} finished; findings captured in ${id} (report: ${reportPath}) ${tag}`]);
     return !seen;
   };
-  links.fleet = link(fleetStore, fleet) ? 'linked' : exists(run, fleetStore, fleet) ? 'already' : 'missing';
-  if (backlog) links.backlog = link(backlog.store, backlog.id) ? 'linked' : exists(run, backlog.store, backlog.id) ? 'already' : 'missing';
+  if (crossLink) links.fleet = link(fleetStore, fleet) ? 'linked' : exists(run, fleetStore, fleet) ? 'already' : 'missing';
+  if (crossLink && backlog) links.backlog = link(backlog.store, backlog.id) ? 'linked' : exists(run, backlog.store, backlog.id) ? 'already' : 'missing';
 
-  // The report body, once, on the brain bead (whether created now or already there).
-  const reportTag = `[scout-report:${task}]`;
-  let reportComment = 'skipped';
-  if (exists(run, 'brain', id)) {
-    const seen = JSON.parse(run('brain', ['comments', id, '--json']) || '[]')
-      .some(c => String(c.text ?? c.body ?? '').includes(reportTag));
-    if (seen) reportComment = 'already';
-    else {
-      const body = report.length > REPORT_COMMENT_CAP
-        ? `${report.slice(0, REPORT_COMMENT_CAP)}\n[truncated: ${REPORT_COMMENT_CAP} of ${report.length} characters; full report: ${reportPath}]`
-        : report;
-      run('brain', ['comments', 'add', id, `Scout report (${task}) - full text ${reportTag}\n\n${body}`]);
-      reportComment = 'written';
-    }
-  }
-
-  const reviews = calls.map(call => {
+  const filed = (reviews ? calls : []).map(call => {
     const reviewId = `review-fmhscout-${hex(`${task}\0${call}`, 8)}`;
     const created = createOnce(run, 'review', reviewId, {
       title: `Captain call (${task}): ${clip(call, 100)}`, priority: 2,
@@ -151,7 +152,7 @@ export async function captureScout({ run, env, home, task, line }: { run: Run, e
       body: `${call}\n\nFrom scout ${task}'s report: ${reportPath}\nsummary bead: ${id}` });
     return { id: reviewId, wrote: created };
   });
-  return { target: id, wrote, links, reportComment, reviews };
+  return { target: id, wrote, action: written.action, rev: written.rev, parts: written.parts, links, reviews: filed };
 }
 
 // The hook path: the rule action for an observed `fm-fleet-ledger.sh appended` call.
@@ -160,5 +161,13 @@ export async function scoutReport({ run, event, env }: { run: Run, event: any, e
   if (!done) return { skipped: 'not a status append' };
   // The status file sits in <home>/state; FM_HOME wins, the status path's own home otherwise.
   const home = env.FM_HOME || dirname(dirname(done.statusPath));
-  return captureScout({ run, env, home, task: done.task, line: done.line });
+  return captureScout({ run, env, home, task: done.task, line: done.line, reviews: reviewHome(home, env) });
+}
+
+// Captain-call review beads are filed for the home the captain reads (the original home) and,
+// when FM_HOOK_SCOUT_CALL_HOMES names others (comma-separated, `*` for all), those too. A
+// secondmate home's calls go to its own firstmate, so they are not the captain's by default.
+export function reviewHome(home: string, env: Record<string, string | undefined> = process.env) {
+  const named = String(env.FM_HOOK_SCOUT_CALL_HOMES ?? '').split(',').map(name => name.trim()).filter(Boolean);
+  return homeName(home) === 'firstmate' || named.includes('*') || named.includes(homeName(home));
 }
