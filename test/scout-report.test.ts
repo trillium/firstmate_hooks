@@ -209,6 +209,7 @@ test('backfill captures every report of every home once, files no review beads, 
   for (const name of ['a', 'dup']) await utimes(join(root, 'mini0-ops', 'data', name, 'report.md'), new Date(0), new Date(0));
   await utimes(join(root, 'macbook-ops', 'data', 'dup', 'report.md'), new Date(0), new Date(0));
   await utimes(join(root, 'macbook-ops', 'data', 'private', 'report.md'), new Date(0), new Date(0));
+  await writeFile(env.STUB_DB, JSON.stringify({ fleet: { beads: { 'fleet-a': { id: 'fleet-a', title: 'a', labels: [], status: 'open', comments: [] } } } }));
   const out: string[] = [];
   const go = (...args: string[]) => scoutCapture(['backfill', '--root', root, ...args], { log: (l: string) => out.push(l), error: () => {}, env });
 
@@ -219,6 +220,7 @@ test('backfill captures every report of every home once, files no review beads, 
   assert.equal(await go(), 0);
   assert.deepEqual(Object.keys((await db()).brain.beads).sort(), ['brain-fmhscout-macbook-ops-dup', 'brain-fmhscout-mini0-ops-a', 'brain-fmhscout-mini0-ops-dup']);
   assert.equal((await db()).review, undefined, 'a backfill files no review beads');
+  assert.equal((await db()).fleet.beads['fleet-a'].comments.length, 0, 'and writes no cross-link comments');
   const summary = JSON.parse(out.at(-1)!);
   assert.equal(summary.created, 3);
   assert.equal(summary['opted-out'], 1);

@@ -110,10 +110,11 @@ async function projectOf(home: string, task: string, backlog: { repo: string | n
 // the hook, the status tail, the rule action and the backfill can all run it for one task.
 //   line            the done line's text (the status file's last line when not given)
 //   reviews         file a `review` bead per captain call (a backfill must not)
+//   links           comment on `fleet-<task>` and the backlog bead (a backfill of old reports does not)
 //   requireTerminal skip unless the task's status is done / needs-decision (or has no status
 //                   file): a report being written is not yet delivered
-export async function captureScout({ run, env, home, task, line, reviews = true, requireTerminal = false }:
-  { run: Run, env: Record<string, string | undefined>, home: string, task: string, line?: string, reviews?: boolean, requireTerminal?: boolean }) {
+export async function captureScout({ run, env, home, task, line, reviews = true, links: crossLink = true, requireTerminal = false }:
+  { run: Run, env: Record<string, string | undefined>, home: string, task: string, line?: string, reviews?: boolean, links?: boolean, requireTerminal?: boolean }) {
   const reportPath = join(home, 'data', task, 'report.md');
   const bundle = await readBundle(home, task);
   if (!bundle) return { skipped: `no report at ${reportPath} (not a scout)` };
@@ -140,8 +141,8 @@ export async function captureScout({ run, env, home, task, line, reviews = true,
     if (!seen) run(store, ['comments', 'add', target, `fm-hooks: scout ${task} finished; findings captured in ${id} (report: ${reportPath}) ${tag}`]);
     return !seen;
   };
-  links.fleet = link(fleetStore, fleet) ? 'linked' : exists(run, fleetStore, fleet) ? 'already' : 'missing';
-  if (backlog) links.backlog = link(backlog.store, backlog.id) ? 'linked' : exists(run, backlog.store, backlog.id) ? 'already' : 'missing';
+  if (crossLink) links.fleet = link(fleetStore, fleet) ? 'linked' : exists(run, fleetStore, fleet) ? 'already' : 'missing';
+  if (crossLink && backlog) links.backlog = link(backlog.store, backlog.id) ? 'linked' : exists(run, backlog.store, backlog.id) ? 'already' : 'missing';
 
   const filed = (reviews ? calls : []).map(call => {
     const reviewId = `review-fmhscout-${hex(`${task}\0${call}`, 8)}`;

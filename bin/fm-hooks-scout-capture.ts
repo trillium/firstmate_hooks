@@ -24,6 +24,7 @@ options:
   --dry-run       show what would be written, write nothing
   --force         capture even when the task's status is not done / needs-decision
   --calls         also file a review bead per captain call (a backfill never does by default)
+  --links         also comment on fleet-<task> and the backlog bead (a backfill does not by default)
   --max-writes N  stop a backfill after N reports were written (default: no limit)
   --min-age S     backfill: skip a report touched in the last S seconds (default 120)
   --quiet         print nothing on success
@@ -39,7 +40,7 @@ export function parseArgv(argv: string[]) {
     else if (arg === '--root') options.root = value();
     else if (arg === '--max-writes') options.maxWrites = Number(value());
     else if (arg === '--min-age') options.minAge = Number(value());
-    else if (['--dry-run', '--force', '--calls', '--quiet', '--help', '-h'].includes(arg)) options[arg.replace(/^-+/, '').replace(/-(\w)/g, (_m, c) => c.toUpperCase())] = true;
+    else if (['--dry-run', '--force', '--calls', '--links', '--quiet', '--help', '-h'].includes(arg)) options[arg.replace(/^-+/, '').replace(/-(\w)/g, (_m, c) => c.toUpperCase())] = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
   return options;
@@ -104,7 +105,7 @@ export async function main(argv: string[], { log = console.log, error = console.
         if (options.command === 'audit' || !bundle || bundle.optedOut || age < (options.minAge ?? 120)) {
           const state = !bundle ? 'no-report' : bundle.optedOut ? 'opted-out' : options.command === 'backfill' ? 'too-new' : 'unchecked';
           if (options.command === 'audit' && bundle && !bundle.optedOut) {
-            const result = await captureScout({ run: dryRunner(base), env, home: item.home, task: item.task, reviews: false });
+            const result = await captureScout({ run: dryRunner(base), env, home: item.home, task: item.task, reviews: false, links: false });
             const action = (result as any).action;
             const word = action === 'unchanged' ? 'captured' : action === 'created' ? 'missing' : 'stale';
             totals[word] = (totals[word] ?? 0) + 1;
@@ -112,7 +113,7 @@ export async function main(argv: string[], { log = console.log, error = console.
           } else totals[state] = (totals[state] ?? 0) + 1;
           continue;
         }
-        const result: any = await captureScout({ run, env, home: item.home, task: item.task, reviews: !!options.calls });
+        const result: any = await captureScout({ run, env, home: item.home, task: item.task, reviews: !!options.calls, links: !!options.links });
         const action = result.skipped ? 'skipped' : result.action;
         totals[action] = (totals[action] ?? 0) + 1;
         if (action !== 'unchanged') say({ home: homeName(item.home), task: item.task, id, action, parts: result.parts });
