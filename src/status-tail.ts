@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { replaceJson } from './atomic.ts';
 import { clip } from './bead-actions.ts';
 import { fleetRecord, TASK_OK } from './fleet-beads.ts';
-import { captureScout } from './scout-capture.ts';
+import { captureScout, reviewHome } from './scout-capture.ts';
 import { EXISTING_FROM_STATE, shadowGuarded, shadowSettings, SHADOW_CONTEXT_LINES } from './jev/shadow.ts';
 import { evalLogPath } from './jev/eval-log.ts';
 import { askGuarded, logPromote, promoteDecision, promoteLine, promoteSettings, requestIdOf } from './jev/promote.ts';
@@ -123,7 +123,7 @@ export async function tailStatusOnce({ root, env = process.env, run, now = Date.
           { task, state: decision?.apply ? 'blocked' : STATE_FROM_LINE[parsed.state],
             line: `status ${parsed.state}${parsed.key ? ` [key=${parsed.key}]` : ''}: ${clip(parsed.text, 300)}${decision?.apply ? ` [jev: stuck ${decision.confidence}, promoted over ${parsed.state}]` : ''}` });
         const entry: Record<string, any> = { task, state: parsed.state, wrote: result.wrote };
-        if (parsed.state === 'done') entry.scout = await captureScout({ run, env, home, task, line: parsed.text });
+        if (parsed.state === 'done' || parsed.state === 'needs-decision') entry.scout = await captureScout({ run, env, home, task, line: parsed.text, reviews: reviewHome(home, env) });
         recorded.push(entry);
         if (decision) await logPromote(promoteLine({ requestId: requestIdOf(asked), packId: workerStatusPack.id, existing: parsed.state,
           verdict: decision.verdict, confidence: decision.confidence, applied: decision.apply, reason: decision.reason }), evalLogPath(env));

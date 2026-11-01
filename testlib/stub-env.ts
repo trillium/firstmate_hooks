@@ -11,7 +11,7 @@ const STUB = fileURLToPath(new URL('./store-stub.ts', import.meta.url));
 export async function withStubs(fn, { stores = ['projects', 'review', 'lifespan', 'task', 'fleet'] } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'fm-hooks-bead-'));
   const env: Record<string, any> = { ...process.env, STUB_DB: join(dir, 'db.json'), STUB_CALLS: join(dir, 'calls.jsonl'),
-    FM_HOOK_QUEUE: join(dir, 'queue'), FM_HOME: join(dir, 'fmhome'), FM_HOOK_FM_BIN_DIR: join(dir, 'fmbin') };
+    FM_HOOK_QUEUE: join(dir, 'queue'), FM_HOME: join(dir, 'firstmate'), FM_HOOK_FM_BIN_DIR: join(dir, 'fmbin') };
   delete env.STUB_FAIL;
   for (const store of stores) {
     const bin = join(dir, `${store}-bin`);

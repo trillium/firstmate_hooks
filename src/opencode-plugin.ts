@@ -2,6 +2,7 @@ import { parseSemanticCommand, explicitOpenCodeOutcome } from './normalize.ts';
 import { observe } from './observer.ts';
 import { appendEventLog } from './queue.ts';
 import { createTurnTracker, recordTurnEnd } from './turn-end.ts';
+import { scoutHook } from './scout-hook.ts';
 
 // OpenCode plugin contract: tool.execute.before / tool.execute.after.
 // Never mutate input or output; unsupported/ambiguous result metadata stays unknown.
@@ -28,6 +29,14 @@ export default async function fmHooksPlugin({ directory, worktree }: { directory
     },
     'tool.execute.after': async (input, output) => {
       turns.toolCall(input.sessionID, input.callID, input.tool === 'bash' || input.tool === 'shell' ? input.args?.command ?? output.args?.command : undefined);
+      // A delivered scout report is captured from the hook itself (scout-hook.ts).
+      const ok = explicitOpenCodeOutcome(output).outcome !== 'failure';
+      if (input.tool === 'write' || input.tool === 'edit') {
+        const filePath = input.args?.filePath ?? output.args?.filePath ?? input.args?.path;
+        scoutHook({ filePath, cwd: directory ?? worktree, ok });
+      } else if (input.tool === 'bash' || input.tool === 'shell') {
+        scoutHook({ command: input.args?.command ?? output.args?.command, cwd: directory ?? worktree, ok });
+      }
       if (input.tool !== 'bash' && input.tool !== 'shell') return;
       const command = input.args?.command ?? output.args?.command;
       if (typeof command !== 'string') return;

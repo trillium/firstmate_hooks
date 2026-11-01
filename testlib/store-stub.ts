@@ -25,7 +25,7 @@ if (verb === 'show') {
   const id = take('--id')[0];
   if (beads[id]) { console.error('exists'); process.exit(1); }
   beads[id] = { id, title: take('--title')[0], labels: (take('-l', '--labels')[0] ?? '').split(',').filter(Boolean),
-    description: take('-d')[0], status: 'open', comments: [], closed_at: null, updated_at: new Date().toISOString() };
+    description: take('-d')[0], issue_type: take('-t')[0] ?? 'task', status: 'open', comments: [], closed_at: null, updated_at: new Date().toISOString() };
   save(); console.log(id);
 } else if (verb === 'comments' && sub === 'add') {
   beads[argv[2]].comments.push({ author: 'stub', text: argv[3] }); save();
@@ -49,6 +49,7 @@ if (verb === 'show') {
   bead.labels = bead.labels.filter(l => !remove.includes(l));
   for (const l of take('--add-label')) if (!bead.labels.includes(l)) bead.labels.push(l);
   if (take('--title').length) bead.title = take('--title')[0];
+  if (take('-d', '--description').length) bead.description = take('-d', '--description')[0];
   save();
 } else if (verb === 'label' && sub === 'add') {
   const bead = beads[argv[2]];

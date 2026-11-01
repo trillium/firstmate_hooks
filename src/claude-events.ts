@@ -6,6 +6,9 @@ import { queueShadowObservations } from './jev/pending.ts';
 import { queueRoot } from './paths.ts';
 import { observeToolCall, TOOL_NAMES } from './tool-events.ts';
 import { turnEndFromClaudeStop } from './turn-end.ts';
+import { scoutHook } from './scout-hook.ts';
+
+const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit']);
 
 // A failed Bash call reports its status as the first line of the error text: `Exit code 7`.
 // A success carries no code (the harness also counts some non-zero codes as success), so none
@@ -30,6 +33,11 @@ export async function handleClaudeHook(event, { eventName = event?.hook_event_na
     return;
   }
   if (!['PostToolUse', 'PostToolUseFailure'].includes(eventName)) return;
+  // A delivered scout report is captured from the hook itself: the status command's done line,
+  // or a write to data/<task>/*.md after delivery. It starts a detached one-shot and returns.
+  scoutHook({ command: tool === 'Bash' ? event.tool_input?.command : undefined,
+    filePath: FILE_TOOLS.has(tool) ? event.tool_input?.file_path : undefined,
+    cwd: event.cwd ?? null, ok: eventName === 'PostToolUse' });
   if (TOOL_NAMES.has(tool)) {
     const finishedAt = new Date().toISOString();
     const timing = timingFrom(await takeCallStart(event.tool_use_id, root), finishedAt);
