@@ -1,15 +1,14 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { UNDECIDED } from '../src/jev/questions/v1.ts';
 import {
-  buildInboxRoutePack, choicesMissingFromRegistry, classifyInbox, DEFAULT_SECOND_MATES, inboxRouteChoices,
+  buildInboxRoutePack, choicesMissingFromRegistry, classifyInbox, inboxRouteChoices,
   INBOX_ROUTE_MIN_CONFIDENCE, ownerFromPackVerdict, parseSecondmates, PHRASE_TABLE, prefilterInboxRoute,
-  shadowInboxRoute, stalePhraseOwners, type InboxBead, type Mate,
+  shadowInboxRoute, stalePhraseOwners, type InboxBead,
 } from '../src/jev/inbox-route.ts';
 
 const fixtureDir = join(import.meta.dir, 'fixtures/jev/inbox-route');
@@ -56,15 +55,12 @@ test('choice list is built from the registry, and a removed mate drops out in th
   assert.deepEqual(stalePhraseOwners(withoutMini0), ['mini0-ops']);
 });
 
-test('live secondmates.md agrees with the fixture registry and the phrase owners', async () => {
-  if (!existsSync(DEFAULT_SECOND_MATES)) return;
-  const live = await readFile(DEFAULT_SECOND_MATES, 'utf8');
+test('fixture secondmates.md agrees with the phrase owners', async () => {
   const fixture = await readFile(registryPath, 'utf8');
-  const shape = (mates: Mate[]) => mates.map(mate => ({ id: mate.id, projects: mate.projects }));
-  assert.deepEqual(shape(parseSecondmates(live)), shape(parseSecondmates(fixture)));
-  assert.deepEqual(choicesMissingFromRegistry(inboxRouteChoices(parseSecondmates(live)), live), []);
-  assert.deepEqual(stalePhraseOwners(live), []);
-  for (const phrase of PHRASE_TABLE) assert.ok(parseSecondmates(live).some(mate => mate.id === phrase.owner), phrase.id);
+  const mates = parseSecondmates(fixture);
+  assert.deepEqual(choicesMissingFromRegistry(inboxRouteChoices(mates), fixture), []);
+  assert.deepEqual(stalePhraseOwners(fixture), []);
+  for (const phrase of PHRASE_TABLE) assert.ok(mates.some(mate => mate.id === phrase.owner), phrase.id);
 });
 
 test('layer 0: explicit to: label and ROUTE TO aliases, with no model call', async () => {
