@@ -13,6 +13,7 @@ import { callArgs, clip, commentOnce, createOnce, flagValue, readMeta } from './
 export const FLEET_STORE = env => env.FM_HOOK_FLEET_STORE || 'fleet';
 export const fleetId = task => `fleet-${task}`;
 export const STATE_LABEL = 'fm-state:';
+const REVIVING_STATES = ['cleaned-up', 'briefed', 'dispatched'];
 export const TASK_OK = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const CREATE_COMMAND = 'brain stores create fleet';
 
@@ -74,6 +75,9 @@ export function ensureFleetBead(run, env, { task, project, kind, mode, harness, 
 // the bead already carries exactly that value, so a replayed action writes nothing.
 export function swapLabel(run, env, id, prefix, value) {
   const bead = showOne(run, FLEET_STORE(env), id);
+  // A closed bead keeps its final state: a late status line must not overwrite cleaned-up.
+  // Teardown (cleaned-up) and a re-brief (briefed/dispatched, which reopens) still move it.
+  if (prefix === STATE_LABEL && bead?.status === 'closed' && !REVIVING_STATES.includes(value)) return false;
   const have = (bead?.labels ?? []).filter(l => l.startsWith(prefix));
   const want = `${prefix}${value}`;
   const stale = have.filter(l => l !== want);

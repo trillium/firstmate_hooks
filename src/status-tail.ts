@@ -38,6 +38,9 @@ import { workerStatusPack } from './jev/questions/v1.ts';
 
 export const STATE_FROM_LINE = {
   working: 'working', 'needs-decision': 'needs-decision', blocked: 'blocked', paused: 'paused', done: 'done', failed: 'failed',
+  // `resolved` closes an earlier blocker or decision: the worker is moving again, so the
+  // blocked / needs-decision label must not stay behind.
+  resolved: 'working',
 };
 const LINE = /^(working|needs-decision|blocked|paused|done|failed|resolved)\s*(?:\[at=(\d+)\])?\s*(?:\[key=([^\]]+)\])?\s*:\s*(.*)$/;
 
