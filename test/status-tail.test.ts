@@ -101,7 +101,7 @@ test('a shorter file restarts at zero; a partial trailing line waits for its new
   assert.deepEqual(stateLabels(await db(), 't'), ['fm-state:done']);
 }));
 
-test('malformed lines are skipped; resolved comments but leaves the state alone', async () => withStubs(async ({ env, db }) => {
+test('malformed lines are skipped; resolved comments and clears blocked', async () => withStubs(async ({ env, db }) => {
   await setup(env);
   await writeFile(statusFile(env, 't'), '');
   await tail(env);
@@ -110,7 +110,7 @@ test('malformed lines are skipped; resolved comments but leaves the state alone'
   const bead = (await db()).fleet.beads['fleet-t'];
   assert.equal(bead.comments.length, 2);
   assert.match(bead.comments[1].text, /status resolved \[key=k\]: cleared/);
-  assert.deepEqual(stateLabels(await db(), 't'), ['fm-state:blocked']);
+  assert.deepEqual(stateLabels(await db(), 't'), ['fm-state:working']);
 }));
 
 test('a store failure holds the cursor at the failed line so the next cycle retries it', async () => withStubs(async ({ env, db }) => {
@@ -163,3 +163,32 @@ test('a scout capture failure holds the cursor at the done line; the retry write
   assert.deepEqual(stateLabels(state, 'sc'), ['fm-state:done']);
   assert.equal(state.fleet.beads['fleet-sc'].comments.length, 2, 'one status comment, one capture link');
 }, { stores: ['projects', 'review', 'lifespan', 'task', 'fleet', 'brain'] }));
+
+test('a resolved line clears blocked and needs-decision from the fleet state', async () => withStubs(async ({ env, db }) => {
+  await setup(env);
+  await writeFile(statusFile(env, 'r'), '');
+  await tail(env);
+  await appendFile(statusFile(env, 'r'), 'needs-decision [at=1791626400] [key=k]: which?\n');
+  await tail(env);
+  assert.deepEqual(stateLabels(await db(), 'r'), ['fm-state:needs-decision']);
+  await appendFile(statusFile(env, 'r'), 'resolved [at=1791626500] [key=k]: answered\n');
+  await tail(env);
+  assert.deepEqual(stateLabels(await db(), 'r'), ['fm-state:working']);
+}));
+
+test('a late status line does not move a closed bead off cleaned-up', async () => withStubs(async ({ env, db }) => {
+  await setup(env);
+  await writeFile(statusFile(env, 'c'), '');
+  await tail(env);
+  await appendFile(statusFile(env, 'c'), 'working [at=1791626400]: go\n');
+  await tail(env);
+  const store = storeRunner(env);
+  store('fleet', ['update', 'fleet-c', '--remove-label', 'fm-state:working', '--add-label', 'fm-state:cleaned-up']);
+  store('fleet', ['close', 'fleet-c', '-r', 'torn down']);
+  await appendFile(statusFile(env, 'c'), 'done [at=1791626500]: late\n');
+  await tail(env);
+  const bead = (await db()).fleet.beads['fleet-c'];
+  assert.equal(bead.status, 'closed');
+  assert.deepEqual(stateLabels(await db(), 'c'), ['fm-state:cleaned-up']);
+  assert.equal(bead.comments.length, 2, 'the late line is still recorded as a comment');
+}));
