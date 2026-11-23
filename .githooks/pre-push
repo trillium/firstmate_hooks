@@ -6,8 +6,8 @@ cd "$(git rev-parse --show-toplevel)"
 # commands would run against this repository instead and commit, reset and reconfigure it.
 for name in $(env | sed -n 's/^\(GIT_[A-Za-z_]*\)=.*/\1/p'); do unset "$name"; done
 BUN="${BUN:-$(command -v bun || echo "$HOME/.bun/bin/bun")}"
-echo "pre-push: bun test" >&2
-"$BUN" test
+echo "pre-push: bun run test" >&2
+"$BUN" run test
 if [ -f tsconfig.json ]; then
   echo "pre-push: bun tsc --noEmit" >&2
   "$BUN" tsc --noEmit
